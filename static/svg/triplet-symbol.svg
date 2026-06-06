@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tealGrad" x1="270" y1="250" x2="760" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00D3CD"/>
+      <stop offset="1" stop-color="#00A4D7"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(206 238)">
+    <path d="M62 0H272L216 76H6L62 0Z" fill="url(#tealGrad)"/>
+    <path d="M298 0H508L452 76H242L298 0Z" fill="url(#tealGrad)"/>
+    <path d="M534 0H744L688 76H478L534 0Z" fill="url(#tealGrad)"/>
+    <path d="M76 188L164 104V524L76 612V188Z" fill="#07122B"/>
+    <path d="M312 188L400 104V524L312 612V188Z" fill="#07122B"/>
+    <path d="M548 188L636 104V524L548 612V188Z" fill="#07122B"/>
+  </g>
+</svg>

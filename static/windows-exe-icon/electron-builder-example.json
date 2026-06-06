@@ -1,0 +1,9 @@
+{
+  "build": {
+    "appId": "com.triplet.app",
+    "productName": "Triplet",
+    "win": {
+      "icon": "windows-exe-icon/triplet-exe-icon.ico"
+    }
+  }
+}
