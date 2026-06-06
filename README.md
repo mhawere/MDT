@@ -1,4 +1,4 @@
-<h1 align="center">Triplet</h1>
+<h1 align="center">Emulet</h1>
 
 <p align="center"><b>Test three Android apps side-by-side, in your browser, with one command.</b></p>
 
@@ -12,15 +12,15 @@
 
 ---
 
-Triplet boots up to **three headless Android emulators**, installs one APK into each, and streams them **live and fully interactive, side-by-side in your browser**. Each app leaves behind its own **colour-coded log trail** — green for OK, yellow for warnings, red for errors — both live in the UI and saved to disk.
+Emulet boots up to **three headless Android emulators**, installs one APK into each, and streams them **live and fully interactive, side-by-side in your browser**. Each app leaves behind its own **colour-coded log trail** — green for OK, yellow for warnings, red for errors — both live in the UI and saved to disk.
 
 Drop your APKs in a folder, run one command, and test. No physical phones, no Android Studio, no manual SDK setup, no Docker.
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="Triplet running three emulators side-by-side" width="100%">
+  <img src="screenshot.png" alt="Emulet running three emulators side-by-side" width="100%">
 </p>
 
-> Add your own screenshot at `docs/screenshot.png`.
+> Add your own screenshot at `screenshot.png`.
 
 ## Features
 
@@ -131,10 +131,15 @@ triplet/
 
 Python · FastAPI · Uvicorn · WebSockets · vanilla HTML/CSS/JS · WebCodecs · Android SDK / emulator / adb. No framework, no build step, no TypeScript, no Docker, no database.
 
+## Collaboration
+
+- Mohammed Yahya (developer)
+- Email: mohammed.y.basaleh@gmail.com
+
 ## License
 
 MIT — see [`LICENSE`](LICENSE).
 
 ---
 
-<p align="center"><sub>Built by NOX Tech Solutions.</sub></p>
+<p align="center"><sub>Built by pytech.dev</sub></p>
