@@ -126,6 +126,7 @@ triplet/
 - scrcpy-based stream for sub-200ms latency (drop-in to the existing WebCodecs decoder)
 - Physical-device support over `adb`
 - Side-by-side log diffing across the three apps
+- Add GPU to improve performance? 
 
 ## Tech stack
 
