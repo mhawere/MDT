@@ -12,33 +12,32 @@ from pathlib import Path
 # ── Resolve project root and set env BEFORE importing app modules ─────────────
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
-def _prepend_path(*dirs: Path) -> None:
-    existing = os.environ.get("PATH", "")
-    new_dirs = os.pathsep.join(str(d) for d in dirs if d.exists())
-    if new_dirs:
-        os.environ["PATH"] = new_dirs + os.pathsep + existing
 
 def setup_environment() -> None:
-    sdk_root = PROJECT_ROOT / ".android-sdk"
-    avd_home = sdk_root / "avd"
-
-    os.environ["ANDROID_SDK_ROOT"] = str(sdk_root)
-    os.environ["ANDROID_HOME"]     = str(sdk_root)
-    os.environ["ANDROID_AVD_HOME"] = str(avd_home)
-
-    _prepend_path(
-        sdk_root / "platform-tools",
-        sdk_root / "emulator",
-        sdk_root / "cmdline-tools" / "latest" / "bin",
+    """Resolve Android SDK path and export env vars before app imports."""
+    # Minimal config bootstrap — full config import happens after env is set.
+    sys.path.insert(0, str(PROJECT_ROOT))
+    import config
+    from app.sdk_config import (
+        apply_sdk_root,
+        is_project_local_sdk,
+        refresh_tool_paths,
+        resolve_sdk_root,
+        validate_sdk,
     )
-    # Ensure avd home exists so avdmanager doesn't complain
-    avd_home.mkdir(parents=True, exist_ok=True)
+
+    root = resolve_sdk_root()
+    apply_sdk_root(root)
+    refresh_tool_paths()
+    config.ANDROID_AVD_HOME.mkdir(parents=True, exist_ok=True)
+
 
 setup_environment()
 
 # Now safe to import config and app modules
 import config
 from app.sdk import bootstrap
+from app.sdk_config import is_project_local_sdk, validate_sdk
 
 
 def _ensure_runtime_dependency(module_name: str) -> None:
@@ -80,10 +79,22 @@ def main() -> None:
     print("  Multi-Device Tester (MDT)")
     print("=" * 60)
 
-    # 1. Bootstrap SDK (idempotent — fast on subsequent runs)
-    bootstrap()
+    root = config.ANDROID_SDK_ROOT
+    validation = validate_sdk(root)
+
+    # 1. Bootstrap project-local SDK (idempotent — fast on subsequent runs)
+    if is_project_local_sdk(root):
+        bootstrap()
+    elif not validation["valid"]:
+        print(f"\n[MDT] ⚠  Android SDK at {root} is incomplete.")
+        print("[MDT]    Missing:", ", ".join(validation.get("missing") or []))
+        print("[MDT]    Open Settings in the UI to set or auto-detect your SDK path.\n")
+    else:
+        print(f"[MDT] Using Android SDK at {root} ✓")
+
     from app.sdk import check_acceleration
-    check_acceleration()
+    if validation["valid"] or is_project_local_sdk(root):
+        check_acceleration()
 
     # 2. Start server + open browser
     url = f"http://localhost:{config.SERVER_PORT}"

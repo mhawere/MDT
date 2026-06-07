@@ -16,23 +16,17 @@ import zipfile
 from pathlib import Path
 
 import config
+from app.sdk_config import (
+    PLATFORM,
+    SdkNotReadyError,
+    SDK_NOT_CONFIGURED_MSG,
+    find_cmdline_bin,
+    is_project_local_sdk,
+)
 
 CMDLINE_TOOLS_VERSION = "11076708"
 ABI = "x86_64"
 SUPPORTED_PLATFORMS = frozenset({"win", "linux", "mac"})
-
-
-def platform_key() -> str:
-    if sys.platform == "win32":
-        return "win"
-    if sys.platform == "darwin":
-        return "mac"
-    if sys.platform.startswith("linux"):
-        return "linux"
-    return "unknown"
-
-
-PLATFORM = platform_key()
 
 
 def _sdk_script_name(tool: str) -> str:
@@ -46,6 +40,9 @@ def _bin_name(tool: str) -> str:
 
 
 def sdkmanager_path() -> Path:
+    found = find_cmdline_bin(config.ANDROID_SDK_ROOT, "sdkmanager")
+    if found:
+        return found
     return (
         config.ANDROID_SDK_ROOT
         / "cmdline-tools"
@@ -56,6 +53,9 @@ def sdkmanager_path() -> Path:
 
 
 def avdmanager_path() -> Path:
+    found = find_cmdline_bin(config.ANDROID_SDK_ROOT, "avdmanager")
+    if found:
+        return found
     return (
         config.ANDROID_SDK_ROOT
         / "cmdline-tools"
@@ -272,24 +272,71 @@ def check_acceleration() -> None:
         print(f"[MDT] Hardware acceleration OK ({label}) ✓")
 
 
-def bootstrap() -> None:
+def bootstrap(*, exit_on_failure: bool = True) -> None:
     ensure_system_prerequisites()
 
     if not SDKMANAGER.exists():
         _download_cmdline_tools()
+        refresh_tool_paths()
     else:
         print("[MDT] cmdline-tools present ✓")
 
     _accept_licenses()
     _install_packages()
+    refresh_tool_paths()
 
     adb = adb_path()
     emu = emulator_bin_path()
     if not adb.exists():
-        print(f"[MDT] ✗  adb not found at {adb}. Check SDK installation.")
-        sys.exit(1)
+        msg = f"[MDT] ✗  adb not found at {adb}. Check SDK installation."
+        if exit_on_failure:
+            print(msg)
+            sys.exit(1)
+        raise SdkNotReadyError(msg)
     if not emu.exists():
-        print(f"[MDT] ✗  emulator not found at {emu}. Check SDK installation.")
-        sys.exit(1)
+        msg = f"[MDT] ✗  emulator not found at {emu}. Check SDK installation."
+        if exit_on_failure:
+            print(msg)
+            sys.exit(1)
+        raise SdkNotReadyError(msg)
 
     print("[MDT] SDK bootstrap complete ✓\n")
+
+
+def refresh_tool_paths() -> None:
+    """Update module-level SDKMANAGER / AVDMANAGER after SDK root changes."""
+    global SDKMANAGER, AVDMANAGER
+    SDKMANAGER = sdkmanager_path()
+    AVDMANAGER = avdmanager_path()
+
+
+def ensure_sdk_ready() -> None:
+    """
+    Validate SDK before device orchestration.
+    Auto-bootstraps project-local .android-sdk when cmdline-tools are missing.
+    """
+    from app.sdk_config import apply_sdk_root, refresh_tool_paths as _refresh_cfg
+    from app.sdk_config import resolve_sdk_root, validate_sdk
+
+    root = resolve_sdk_root()
+    apply_sdk_root(root)
+    _refresh_cfg()
+
+    validation = validate_sdk(root)
+    if validation["ready"]:
+        refresh_tool_paths()
+        return
+
+    if is_project_local_sdk(root):
+        bootstrap(exit_on_failure=False)
+        validation = validate_sdk(root)
+        if validation["valid"]:
+            refresh_tool_paths()
+            return
+
+    missing = ", ".join(validation.get("missing") or ["sdk"])
+    if not validation["valid"]:
+        raise SdkNotReadyError(
+            f"{SDK_NOT_CONFIGURED_MSG} Missing: {missing}."
+        )
+    refresh_tool_paths()
