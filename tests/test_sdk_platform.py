@@ -67,12 +67,27 @@ async def test_apk_dir_does_not_use_bat_paths_on_linux(tmp_path: Path):
     apk_dir.mkdir()
     (apk_dir / "demo.apk").write_bytes(b"PK fake apk")
 
+    from app.state import DeviceState
+
     saved_devices = list(app_state.devices)
     saved_mem = config.EMULATOR_MEMORY_MB
     saved_adapted = main_mod._resources_adapted
     app_state.devices = []
+    old_apk = tmp_path / "old.apk"
+    old_apk.write_bytes(b"PK old")
+    ds = DeviceState(
+        index=0,
+        serial=config.emulator_serial(0),
+        avd_name="mdt_0",
+        active=True,
+        apk_path=old_apk,
+        package="com.example.old",
+        state="running",
+    )
+    app_state.register_device(ds)
     try:
         with patch("app.main.apk_mod.resolve_package", return_value="com.example.demo"), \
+             patch("app.main.emulator.stop_emulator", new=AsyncMock()), \
              patch("app.main.avd_mod.ensure_avd", return_value="mdt_0") as ensure_avd, \
              patch("app.main.emulator.launch_emulator") as launch, \
              patch("app.main.emulator.wait_for_boot", new=AsyncMock(return_value=False)):
