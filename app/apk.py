@@ -29,7 +29,23 @@ def get_apk_dir() -> Path:
 
 def set_apk_dir(path: Path) -> Path:
     """Set and persist the active APK directory."""
-    p = path.expanduser().resolve()
+    p = path.expanduser()
+    if not p.is_absolute():
+        p = (config.PROJECT_ROOT / p).resolve()
+    else:
+        p = p.resolve()
+
+    if not p.exists():
+        raise ValueError(f"APK directory does not exist: {p}")
+    if not p.is_dir():
+        raise ValueError(f"APK path is not a directory: {p}")
+    try:
+        next(p.iterdir())
+    except PermissionError as exc:
+        raise ValueError(f"APK directory is not readable: {p}") from exc
+    except StopIteration:
+        pass
+
     p.mkdir(parents=True, exist_ok=True)
     _APK_SOURCE_FILE.write_text(str(p), encoding="utf-8")
     config.APK_INPUT_DIR = p
@@ -37,17 +53,13 @@ def set_apk_dir(path: Path) -> Path:
 
 
 def scan_apks() -> list[Path]:
-    """Return up to MAX_DEVICES APKs from apk_input/, newest first."""
+    """Return up to MAX_DEVICES APKs from apk_input/, sorted by name."""
     apk_dir = get_apk_dir()
     apk_dir.mkdir(parents=True, exist_ok=True)
-    apks = sorted(
-        apk_dir.glob("*.apk"),
-        key=lambda p: (p.stat().st_mtime_ns, p.name.lower()),
-        reverse=True,
-    )
+    apks = sorted(apk_dir.glob("*.apk"))
     if len(apks) > config.MAX_DEVICES:
         print(
-            f"[MDT] ⚠  Found {len(apks)} APKs — using {config.MAX_DEVICES} newest files only."
+            f"[MDT] ⚠  Found {len(apks)} APKs — using first {config.MAX_DEVICES} only."
         )
         apks = apks[: config.MAX_DEVICES]
     return apks

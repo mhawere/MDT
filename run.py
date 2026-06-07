@@ -106,8 +106,6 @@ def main() -> None:
         host=config.SERVER_HOST,
         port=config.SERVER_PORT,
         log_level="warning",
-        ws_ping_interval=None,
-        ws_ping_timeout=None,
     )
 
 

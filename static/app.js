@@ -10,6 +10,16 @@
 const WS_RECONNECT_BASE_MS = 1500;
 const WS_RECONNECT_MAX_MS  = 15000;
 const MAX_LOG_LINES        = 1000; // DOM line limit per device (trim oldest)
+const TEST_LABELS = {
+  launch: 'Launch',
+  crash_detection: 'Crash',
+  anr_detection: 'ANR',
+  permission_audit: 'Permissions',
+  activity_smoke: 'Activity',
+  memory_baseline: 'Memory',
+  network_connectivity: 'Network',
+  ui_responsiveness: 'UI Tap',
+};
 const TAP_THRESHOLD         = 0.004;
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -240,7 +250,7 @@ function renderEmptyState() {
         <line x1="9" y1="11" x2="13" y2="11"/>
       </svg>
       <h2>No APKs detected</h2>
-      <p>Drop up to <strong>3 APK files</strong> into the <code>apk_input/</code> folder, then refresh or restart MDT.</p>
+      <p>Drop up to <strong>2 APK files</strong> into the <code>apk_input/</code> folder, then refresh or restart MDT.</p>
       <p style="font-size:12px; color: var(--text-muted);">The server is running and waiting.</p>
     </div>`;
   document.getElementById('global-status').textContent = 'No APKs';
@@ -313,7 +323,10 @@ class DeviceUI {
     this.ws      = null;
     this.wsRetry = 0;
 
-    // Log state
+    // Test state
+    this.testResults = [];
+    this.testRunning = false;
+    this.testPollTimer = null;
     this.logFilter    = 'all';
     this.logAutoScroll = true;
     this.logLines     = [];   // {el, color} for filter toggling
@@ -343,7 +356,6 @@ class DeviceUI {
       : `Device ${this.index}`;
     const pkg     = this.ds.package || '—';
     const serial  = this.ds.serial  || '—';
-    const build   = this._formatBuildMeta(this.ds);
 
     this.card.innerHTML = `
       <!-- Header -->
@@ -356,7 +368,6 @@ class DeviceUI {
         <div class="card-meta">
           <span class="meta-item" id="pkg-${this.index}" title="${pkg}">${_truncate(pkg, 32)}</span>
           <span class="meta-item" id="serial-${this.index}">${serial}</span>
-          <span class="meta-item" id="build-${this.index}" title="${build.title}">${build.text}</span>
           <div class="counters">
             <span class="counter ok"    id="cnt-ok-${this.index}">   <span class="counter-dot"></span><span id="cnt-ok-val-${this.index}">0</span></span>
             <span class="counter warn"  id="cnt-warn-${this.index}"> <span class="counter-dot"></span><span id="cnt-warn-val-${this.index}">0</span></span>
@@ -369,6 +380,7 @@ class DeviceUI {
       <div class="view-toggle" id="toggle-${this.index}">
         <button class="active"  data-view="screen" id="vbtn-screen-${this.index}">Screen</button>
         <button                 data-view="logs"   id="vbtn-logs-${this.index}">Logs</button>
+        <button                 data-view="tests"  id="vbtn-tests-${this.index}">Tests</button>
         <button                 data-view="split"  id="vbtn-split-${this.index}">Split</button>
       </div>
 
@@ -381,6 +393,7 @@ class DeviceUI {
     // Build the three view panes (hidden until toggled)
     this._buildScreenPane();
     this._buildLogPane();
+    this._buildTestPane();
     this._setView('screen');
 
     // View toggle wiring
@@ -429,6 +442,16 @@ class DeviceUI {
         <button class="btn btn-ghost btn-sm" id="btn-reboot-${this.index}"  title="Reboot device">⏻ Reboot</button>
         <button class="btn btn-ghost btn-sm" id="btn-rotate-${this.index}"  title="Rotate screen">⤾ Rotate</button>
         <button class="btn btn-ghost btn-sm" id="btn-screenshot-${this.index}" title="Save screenshot">📷 Save</button>
+      </div>
+      <!-- Live reload -->
+      <div class="live-reload-strip" id="live-reload-${this.index}">
+        <label class="live-reload-toggle" title="Watch build output and auto-install via adb">
+          <input type="checkbox" id="lr-toggle-${this.index}" />
+          <span class="lr-label">Live Reload</span>
+        </label>
+        <span class="lr-status" id="lr-status-${this.index}">Off</span>
+        <button class="btn btn-ghost btn-sm lr-set-path" id="lr-path-${this.index}" title="Set watch path">📁 Path</button>
+        <button class="btn btn-ghost btn-sm lr-sync-now hidden" id="lr-sync-${this.index}" title="Sync now">↻ Sync</button>
       </div>`;
 
     this.canvas = this.screenPane.querySelector(`#scanvas-${this.index}`);
@@ -444,6 +467,121 @@ class DeviceUI {
 
     this._wireScreenInput();
     this._wireDeviceControls();
+    this._wireLiveReload();
+    this._fetchLiveReloadStatus();
+  }
+
+  _buildTestPane() {
+    const tests = globalConfig.tests || Object.keys(TEST_LABELS);
+    this.testPane = document.createElement('div');
+    this.testPane.className = 'test-pane';
+    this.testPane.innerHTML = `
+      <div class="test-panel">
+        <div class="test-panel-header">
+          <span class="test-panel-title">Built-in APK Tests</span>
+          <button class="test-run-all" id="btn-run-all-tests-${this.index}">Run All</button>
+        </div>
+        <div class="test-buttons" id="test-buttons-${this.index}">
+          ${tests.map(t => `<button class="test-btn" data-test="${t}" id="tbtn-${t}-${this.index}">${TEST_LABELS[t] || t}</button>`).join('')}
+        </div>
+        <div class="test-results" id="test-results-${this.index}">
+          <div class="test-result-line running">No tests run yet.</div>
+        </div>
+      </div>`;
+
+    this.testPane.querySelector(`#btn-run-all-tests-${this.index}`)
+      .addEventListener('click', () => this._runTests(null));
+    this.testPane.querySelectorAll('.test-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._runTests([btn.dataset.test]));
+    });
+  }
+
+  async _runTests(testNames) {
+    if (this.testRunning) {
+      showToast('Tests already running on this device', 'warn');
+      return;
+    }
+    this.testRunning = true;
+    this.testResults = [];
+    this._renderTestResults([{ test: '…', status: 'running', message: 'Starting…' }]);
+
+    const url = testNames
+      ? `/api/device/${this.index}/tests/run`
+      : `/api/device/${this.index}/tests/run`;
+    const body = testNames ? JSON.stringify({ tests: testNames }) : JSON.stringify({});
+
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      this._startTestPoll();
+    } catch (e) {
+      this.testRunning = false;
+      this._renderTestResults([{ test: 'error', status: 'error', message: String(e.message || e) }]);
+      showToast(`Device ${this.index}: test failed to start`, 'error');
+    }
+  }
+
+  _startTestPoll() {
+    if (this.testPollTimer) clearInterval(this.testPollTimer);
+    this.testPollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/device/${this.index}/tests/status`);
+        const data = await res.json();
+        if (data.results && data.results.length) {
+          this._renderTestResults(data.results, data.current_test);
+        }
+        if (data.status === 'passed' || data.status === 'failed' || data.status === 'idle') {
+          if (data.status !== 'idle') {
+            this._renderTestResults(data.results || []);
+            showToast(`Device ${this.index}: tests ${data.status}`, data.status === 'passed' ? '' : 'warn');
+          }
+          this.testRunning = false;
+          clearInterval(this.testPollTimer);
+          this.testPollTimer = null;
+        }
+      } catch (_) {}
+    }, 800);
+  }
+
+  _renderTestResults(results, currentTest) {
+    const el = this.testPane?.querySelector(`#test-results-${this.index}`);
+    if (!el) return;
+    if (!results || !results.length) {
+      el.innerHTML = '<div class="test-result-line running">No results yet.</div>';
+      return;
+    }
+    el.innerHTML = results.map(r => {
+      const cls = r.status === 'passed' ? 'passed'
+        : r.status === 'failed' ? 'failed'
+        : r.status === 'error' ? 'error' : 'running';
+      const dur = r.duration_ms != null ? ` (${r.duration_ms}ms)` : '';
+      return `<div class="test-result-line ${cls}"><span>${_esc(r.test || '?')}</span><span>${_esc(r.message || r.status || '')}${dur}</span></div>`;
+    }).join('');
+    if (currentTest) {
+      el.innerHTML += `<div class="test-result-line running">Running: ${_esc(currentTest)}…</div>`;
+    }
+    this.testPane.querySelectorAll('.test-btn').forEach(btn => {
+      btn.classList.toggle('running', btn.dataset.test === currentTest);
+    });
+  }
+
+  _onTest(msg) {
+    if (msg.event === 'result') {
+      const idx = this.testResults.findIndex(r => r.test === msg.test);
+      const entry = { test: msg.test, status: msg.status, message: msg.message, duration_ms: msg.duration_ms };
+      if (idx >= 0) this.testResults[idx] = entry;
+      else this.testResults.push(entry);
+      this._renderTestResults(this.testResults, msg.current_test);
+    } else if (msg.event === 'progress') {
+      this._renderTestResults(this.testResults, msg.current_test);
+    } else if (msg.event === 'run_complete') {
+      this.testResults = msg.results || [];
+      this.testRunning = false;
+      this._renderTestResults(this.testResults);
+    }
   }
 
   _buildLogPane() {
@@ -485,6 +623,8 @@ class DeviceUI {
       body.appendChild(this.screenPane);
     } else if (view === 'logs') {
       body.appendChild(this.logPane);
+    } else if (view === 'tests') {
+      body.appendChild(this.testPane);
     } else {
       // split
       const wrap = document.createElement('div');
@@ -593,6 +733,137 @@ class DeviceUI {
     sp.querySelector(`#btn-screenshot-${i}`).addEventListener('click', () => this._saveScreenshot());
   }
 
+  // ── Live reload ────────────────────────────────────────────────────────────
+  _wireLiveReload() {
+    const i = this.index;
+    const toggle = this.screenPane.querySelector(`#lr-toggle-${i}`);
+    const pathBtn = this.screenPane.querySelector(`#lr-path-${i}`);
+    const syncBtn = this.screenPane.querySelector(`#lr-sync-${i}`);
+
+    this.lrWatchPath = this.ds.apk_path || '';
+
+    toggle.addEventListener('change', async () => {
+      if (toggle.checked) {
+        await this._enableLiveReload();
+      } else {
+        await this._disableLiveReload();
+      }
+    });
+
+    pathBtn.addEventListener('click', async () => {
+      const defaultPath = this.lrWatchPath || this.ds.apk_path || '';
+      const entered = window.prompt(
+        'Watch path (APK file or build output folder)\n\nGradle example:\n  app/build/outputs/apk/debug/app-debug.apk',
+        defaultPath
+      );
+      if (entered === null) return;
+      this.lrWatchPath = entered;
+      if (toggle.checked) {
+        await this._enableLiveReload();
+      }
+    });
+
+    syncBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch(`/api/device/${i}/live-reload/sync`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        showToast(`Device ${i}: synced`);
+      } catch (e) {
+        showToast(`Device ${i}: sync failed — ${e.message}`, 'error');
+      }
+    });
+  }
+
+  async _fetchLiveReloadStatus() {
+    try {
+      const res = await fetch(`/api/device/${this.index}/live-reload/status`);
+      if (res.ok) this._updateLiveReloadUI(await res.json());
+    } catch (_) {}
+  }
+
+  async _enableLiveReload() {
+    const i = this.index;
+    const toggle = this.screenPane.querySelector(`#lr-toggle-${i}`);
+    const body = {};
+    if (this.lrWatchPath) body.watch_path = this.lrWatchPath;
+
+    try {
+      const res = await fetch(`/api/device/${i}/live-reload/enable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      this.lrWatchPath = data.watch_path || this.lrWatchPath;
+      this._updateLiveReloadUI(data);
+      showToast(`Device ${i}: live reload watching`);
+    } catch (e) {
+      if (toggle) toggle.checked = false;
+      showToast(`Device ${i}: live reload failed — ${e.message}`, 'error');
+    }
+  }
+
+  async _disableLiveReload() {
+    const i = this.index;
+    try {
+      const res = await fetch(`/api/device/${i}/live-reload/disable`, { method: 'POST' });
+      if (res.ok) this._updateLiveReloadUI(await res.json());
+      showToast(`Device ${i}: live reload stopped`);
+    } catch (_) {}
+  }
+
+  _updateLiveReloadUI(data) {
+    const i = this.index;
+    const toggle = this.screenPane.querySelector(`#lr-toggle-${i}`);
+    const statusEl = this.screenPane.querySelector(`#lr-status-${i}`);
+    const syncBtn = this.screenPane.querySelector(`#lr-sync-${i}`);
+    const strip = this.screenPane.querySelector(`#live-reload-${i}`);
+    if (!statusEl) return;
+
+    if (toggle) toggle.checked = !!data.enabled;
+
+    const status = data.status || 'stopped';
+    let label = status;
+    if (status === 'watching') label = 'Watching';
+    else if (status === 'syncing') label = 'Syncing…';
+    else if (status === 'error') label = 'Error';
+    else label = 'Off';
+
+    if (data.last_sync_at) {
+      const t = new Date(data.last_sync_at).toLocaleTimeString();
+      label += ` · ${t}`;
+    }
+    if (data.last_error) {
+      statusEl.title = data.last_error;
+    } else {
+      statusEl.title = data.watch_path || '';
+    }
+
+    statusEl.textContent = label;
+    statusEl.className = `lr-status lr-${status}`;
+
+    if (strip) strip.classList.toggle('lr-active', !!data.enabled);
+    if (syncBtn) syncBtn.classList.toggle('hidden', !data.enabled);
+  }
+
+  _onLiveReload(msg) {
+    this._updateLiveReloadUI(msg);
+    if (msg.status === 'syncing') {
+      showToast(`Device ${this.index}: syncing…`);
+    } else if (msg.status === 'watching' && msg.last_sync_at) {
+      showToast(`Device ${this.index}: reload complete`);
+    } else if (msg.status === 'error') {
+      showToast(`Device ${this.index}: reload error — ${msg.last_error || 'unknown'}`, 'error');
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   _normalizeCoords(e) {
     const rect = this.canvas.getBoundingClientRect();
@@ -669,6 +940,8 @@ class DeviceUI {
       case 'log':      this._onLog(msg);           break;
       case 'state':    this._onState(msg);         break;
       case 'counters': this._onCounters(msg);      break;
+      case 'test':     this._onTest(msg);          break;
+      case 'live_reload': this._onLiveReload(msg); break;
       case 'ping':     break; // keepalive
     }
   }
@@ -729,44 +1002,7 @@ class DeviceUI {
       if (el) el.textContent = msg.serial;
     }
 
-    const buildEl = document.getElementById(`build-${this.index}`);
-    if (buildEl) {
-      const build = this._formatBuildMeta(msg);
-      buildEl.textContent = build.text;
-      buildEl.title = build.title;
-    }
-
     updateGlobalStatus();
-  }
-
-  _formatBuildMeta(data) {
-    const ts = data.apk_build_local || null;
-    const size = Number.isFinite(data.apk_size_bytes)
-      ? `${(data.apk_size_bytes / (1024 * 1024)).toFixed(2)} MB`
-      : null;
-
-    if (!ts && !size) {
-      return { text: 'Loaded build: —', title: 'Loaded build unavailable' };
-    }
-
-    if (ts && size) {
-      return {
-        text: `Loaded build: ${ts} (${size})`,
-        title: `Loaded build timestamp: ${ts}; size: ${size}`,
-      };
-    }
-
-    if (ts) {
-      return {
-        text: `Loaded build: ${ts}`,
-        title: `Loaded build timestamp: ${ts}`,
-      };
-    }
-
-    return {
-      text: `Loaded build: ${size}`,
-      title: `Loaded build size: ${size}`,
-    };
   }
 
   _onCounters(msg) {

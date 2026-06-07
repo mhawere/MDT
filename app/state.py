@@ -4,7 +4,6 @@ state.py — In-memory session/device state and WebSocket connection registry.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -22,7 +21,6 @@ class DeviceState:
     serial: str
     avd_name: str
     apk_path: Optional[Path] = None
-    apk_sig: Optional[tuple[int, int]] = None  # (mtime_ns, size_bytes)
     package: Optional[str]   = None
     state: str               = "idle"   # one of STATES
     status_msg: str          = ""
@@ -39,22 +37,13 @@ class DeviceState:
     logcat_proc: object         = field(default=None, repr=False)
     streamer_task: object       = field(default=None, repr=False)
     logcat_task: object         = field(default=None, repr=False)
-    install_recovery_attempted: bool = field(default=False, repr=False)
 
     def to_dict(self) -> dict:
-        apk_mtime_ns = self.apk_sig[0] if self.apk_sig else None
-        apk_size_bytes = self.apk_sig[1] if self.apk_sig else None
-        apk_build_local = None
-        if apk_mtime_ns:
-            apk_build_local = datetime.fromtimestamp(apk_mtime_ns / 1_000_000_000).strftime("%Y-%m-%d %H:%M:%S")
         return {
             "index":     self.index,
             "serial":    self.serial,
             "avd_name":  self.avd_name,
             "apk_path":  str(self.apk_path) if self.apk_path else None,
-            "apk_mtime_ns": apk_mtime_ns,
-            "apk_size_bytes": apk_size_bytes,
-            "apk_build_local": apk_build_local,
             "package":   self.package,
             "state":     self.state,
             "status_msg": self.status_msg,

@@ -101,15 +101,28 @@ def _accept_licenses() -> None:
         print(f"[MDT]   (licenses stdout): {result.stdout[-400:]}")
 
 
+def _build_tools_installed() -> bool:
+    build_tools = config.ANDROID_SDK_ROOT / "build-tools"
+    if not build_tools.exists():
+        return False
+    for ver_dir in build_tools.iterdir():
+        if (ver_dir / "aapt2.exe").exists() or (ver_dir / "aapt2").exists():
+            return True
+    return False
+
+
 def _package_installed(pkg: str) -> bool:
     mapping = {
         "platform-tools": config.ANDROID_SDK_ROOT / "platform-tools" / "adb.exe",
         "emulator": config.ANDROID_SDK_ROOT / "emulator" / "emulator.exe",
+        "build-tools": None,
         f"platforms;android-{config.API_LEVEL}":
             config.ANDROID_SDK_ROOT / "platforms" / f"android-{config.API_LEVEL}" / "android.jar",
         f"system-images;android-{config.API_LEVEL};google_apis;{ABI}":
             config.ANDROID_SDK_ROOT / "system-images" / f"android-{config.API_LEVEL}" / "google_apis" / ABI,
     }
+    if pkg == "build-tools":
+        return _build_tools_installed()
     path = mapping.get(pkg)
     return path is not None and path.exists()
 
@@ -118,6 +131,7 @@ def _install_packages() -> None:
     packages = [
         "platform-tools",
         "emulator",
+        "build-tools",
         f"platforms;android-{config.API_LEVEL}",
         f"system-images;android-{config.API_LEVEL};google_apis;{ABI}",
     ]

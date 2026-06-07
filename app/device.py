@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 import config
-from app.sdk import _sdk_env
+from app.adb_util import adb_bin, adb_env
 
 
 def _adb() -> str:
-    return str(config.ANDROID_SDK_ROOT / "platform-tools" / "adb.exe")
+    return adb_bin()
 
 
 def _env() -> dict:
-    return _sdk_env()
+    return adb_env()
 
 
 # ── Sync helpers (used outside async context) ─────────────────────────────────
@@ -50,113 +50,18 @@ async def adb_shell(serial: str, cmd: str, timeout: int = 30) -> str:
         return ""
 
 
-async def _wait_for_package_manager(serial: str, timeout: int = 45) -> bool:
-    """Wait until package manager responds, reducing install-time broken pipe errors."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        out = await adb_shell(serial, "cmd package path android", timeout=10)
-        if "package:" in out:
-            return True
-        await asyncio.sleep(1)
-    return False
-
-
-async def _run_adb_install(serial: str, apk_path: Path, extra_args: list[str]) -> tuple[bool, str]:
-    proc = await asyncio.create_subprocess_exec(
-        _adb(), "-s", serial, "install", *extra_args, "-r", "-g", str(apk_path),
-        env=_env(),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-    out = (stdout + stderr).decode(errors="replace")
-    success = proc.returncode == 0 and "Success" in out
-    return success, out
-
-
-async def _run_adb_push(serial: str, src_apk: Path, dst_apk: str) -> tuple[bool, str]:
-    proc = await asyncio.create_subprocess_exec(
-        _adb(), "-s", serial, "push", str(src_apk), dst_apk,
-        env=_env(),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
-    out = (stdout + stderr).decode(errors="replace")
-    return proc.returncode == 0, out
-
-
-async def _run_shell_install(serial: str, dst_apk: str) -> tuple[bool, str]:
-    # Try cmd package first, then pm for older Android images.
-    out_cmd = await adb_shell(serial, f"cmd package install -r -g '{dst_apk}'", timeout=180)
-    if "success" in out_cmd.lower():
-        return True, out_cmd
-
-    out_pm = await adb_shell(serial, f"pm install -r -g '{dst_apk}'", timeout=180)
-    if "success" in out_pm.lower():
-        return True, f"cmd package: {out_cmd}\npm install: {out_pm}"
-
-    return False, f"cmd package: {out_cmd}\npm install: {out_pm}"
-
-
 async def install_apk(serial: str, apk_path: Path) -> tuple[bool, str]:
     """
     Install APK on device. Returns (success, output).
     -r = replace existing, -g = grant all runtime permissions.
     """
-    await _wait_for_package_manager(serial)
-
-    # Prefer non-streaming first; this avoids intermittent "Broken pipe (32)" failures
-    # seen on some emulator/device states during streamed installs.
-    ok, out = await _run_adb_install(serial, apk_path, ["--no-streaming"])
-    if ok:
-        return True, out
-
-    if "unknown option" in out.lower() and "--no-streaming" in out:
-        # Older adb may not support --no-streaming; fallback to regular install.
-        return await _run_adb_install(serial, apk_path, [])
-
-    broken_pipe = "broken pipe" in out.lower() or "performing streamed install" in out.lower()
-    if broken_pipe:
-        await asyncio.sleep(1)
-        ok2, out2 = await _run_adb_install(serial, apk_path, ["--no-streaming"])
-        if ok2:
-            return True, out2
-        combined = f"{out}\n\n--- retry --no-streaming ---\n{out2}"
-
-        # Last-mile fallback: push then install from device-side shell.
-        remote_apk = f"/data/local/tmp/{apk_path.name}"
-        pushed, push_out = await _run_adb_push(serial, apk_path, remote_apk)
-        if pushed:
-            shell_ok, shell_out = await _run_shell_install(serial, remote_apk)
-            await adb_shell(serial, f"rm -f '{remote_apk}'", timeout=20)
-            if shell_ok:
-                return True, f"{combined}\n\n--- push+shell install ---\n{push_out}\n{shell_out}"
-            combined = f"{combined}\n\n--- push+shell install failed ---\n{push_out}\n{shell_out}"
-        else:
-            combined = f"{combined}\n\n--- push failed ---\n{push_out}"
-
-        # If package service is unstable, reboot once and retry non-streaming install.
-        await reboot_device(serial)
-        await _wait_for_package_manager(serial, timeout=90)
-        ok3, out3 = await _run_adb_install(serial, apk_path, ["--no-streaming"])
-        if ok3:
-            return True, f"{combined}\n\n--- reboot + retry --no-streaming ---\n{out3}"
-
-        return False, f"{combined}\n\n--- reboot + retry failed ---\n{out3}"
-
-    return False, out
-
-
-async def uninstall_package(serial: str, package: str) -> tuple[bool, str]:
-    """Uninstall package from device. Returns (success, output)."""
     proc = await asyncio.create_subprocess_exec(
-        _adb(), "-s", serial, "uninstall", package,
+        _adb(), "-s", serial, "install", "-r", "-g", str(apk_path),
         env=_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     out = (stdout + stderr).decode(errors="replace")
     success = proc.returncode == 0 and "Success" in out
     return success, out
@@ -265,6 +170,20 @@ async def clear_logcat(serial: str) -> None:
         stderr=asyncio.subprocess.DEVNULL,
     )
     await asyncio.wait_for(proc.communicate(), timeout=10)
+
+
+async def push_file(serial: str, local_path: Path, remote_path: str) -> tuple[bool, str]:
+    """Push a local file to device via adb. Returns (success, output)."""
+    proc = await asyncio.create_subprocess_exec(
+        _adb(), "-s", serial, "push", str(local_path), remote_path,
+        env=_env(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    out = (stdout + stderr).decode(errors="replace")
+    success = proc.returncode == 0
+    return success, out
 
 
 async def reboot_device(serial: str) -> None:

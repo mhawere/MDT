@@ -1,7 +1,7 @@
 {
   "build": {
-    "appId": "com.triplet.app",
-    "productName": "Triplet",
+    "appId": "com.mdt.app",
+    "productName": "MDT",
     "win": {
       "icon": "windows-exe-icon/triplet-exe-icon.ico"
     }
