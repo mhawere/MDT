@@ -1,0 +1,17 @@
+<svg width="1800" height="600" viewBox="0 0 1800 600" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tealGrad" x1="180" y1="170" x2="620" y2="260" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#00D3CD"/>
+      <stop offset="1" stop-color="#00A4D7"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(110 128) scale(0.55)">
+    <path d="M62 0H272L216 76H6L62 0Z" fill="url(#tealGrad)"/>
+    <path d="M298 0H508L452 76H242L298 0Z" fill="url(#tealGrad)"/>
+    <path d="M534 0H744L688 76H478L534 0Z" fill="url(#tealGrad)"/>
+    <path d="M76 188L164 104V524L76 612V188Z" fill="#07122B"/>
+    <path d="M312 188L400 104V524L312 612V188Z" fill="#07122B"/>
+    <path d="M548 188L636 104V524L548 612V188Z" fill="#07122B"/>
+  </g>
+  <text x="660" y="370" fill="#07122B" font-family="Segoe UI, Inter, Arial, sans-serif" font-size="210" font-weight="600" letter-spacing="-8">Triplet</text>
+</svg>
