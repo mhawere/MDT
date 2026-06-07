@@ -80,16 +80,77 @@ def _emulator_stderr_snippet(ds: DeviceState, max_chars: int = 400) -> str:
     return text
 
 
-async def wait_for_boot(ds: DeviceState) -> bool:
+async def _adb_get_state(adb: str, serial: str, env: dict) -> str | None:
+    """Return adb get-state (device/offline/etc.) or None if unavailable."""
+    proc = await asyncio.create_subprocess_exec(
+        adb, "-s", serial, "get-state",
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return None
+    if proc.returncode != 0:
+        return None
+    return stdout.decode(errors="replace").strip()
+
+
+async def _device_is_online(adb: str, serial: str, env: dict) -> bool:
+    return await _adb_get_state(adb, serial, env) == "device"
+
+
+async def wait_for_disconnect(ds: DeviceState, timeout: float) -> bool:
+    """
+    Wait until adb loses the device (e.g. after adb reboot).
+    Returns True if disconnect was observed, False on timeout.
+    """
+    adb = _adb_bin()
+    serial = ds.serial
+    env = _sdk_env()
+    deadline = time.monotonic() + timeout
+    saw_online = False
+
+    await asyncio.sleep(1.0)
+
+    while time.monotonic() < deadline:
+        proc = ds.emulator_proc
+        if proc and proc.poll() is not None:
+            return True
+
+        if await _device_is_online(adb, serial, env):
+            saw_online = True
+        elif saw_online:
+            return True
+
+        await asyncio.sleep(0.5)
+
+    return False
+
+
+async def wait_for_boot(ds: DeviceState, *, after_reboot: bool = False) -> bool:
     """
     Wait until the emulator is fully booted.
     Returns True on success, False on timeout.
     Updates ds.state and broadcasts state changes.
+
+    When after_reboot=True, waits for adb disconnect first so stale
+    sys.boot_completed=1 from the previous session is not mistaken for done.
     """
     adb = _adb_bin()
     serial = ds.serial
     env = _sdk_env()
     deadline = time.monotonic() + config.EMULATOR_BOOT_TIMEOUT
+    poll_sec = getattr(config, "EMULATOR_BOOT_POLL_SEC", 2)
+
+    if after_reboot:
+        await _broadcast_state(ds, "booting", "Waiting for device to restart…")
+        disconnect_timeout = getattr(config, "REBOOT_DISCONNECT_TIMEOUT", 45)
+        disconnected = await wait_for_disconnect(ds, disconnect_timeout)
+        if not disconnected:
+            await _broadcast_state(ds, "booting", "Device still online — waiting for full boot…")
 
     # Step 1: wait-for-device
     await _broadcast_state(ds, "booting", "Waiting for emulator device…")
@@ -102,6 +163,7 @@ async def wait_for_boot(ds: DeviceState) -> bool:
         )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            await _broadcast_state(ds, "error", "Timed out waiting for emulator device.")
             return False
         await asyncio.wait_for(proc.wait(), timeout=remaining)
     except asyncio.TimeoutError:
@@ -114,6 +176,10 @@ async def wait_for_boot(ds: DeviceState) -> bool:
 
     # Step 2: poll boot_completed + bootanim stopped
     await _broadcast_state(ds, "booting", "Waiting for Android boot…")
+    reconnected_at: float | None = None
+    saw_boot_anim_running = False
+    min_uptime = getattr(config, "REBOOT_MIN_UPTIME_SEC", 5) if after_reboot else 0
+
     while time.monotonic() < deadline:
         proc = ds.emulator_proc
         if proc and proc.poll() is not None:
@@ -127,11 +193,27 @@ async def wait_for_boot(ds: DeviceState) -> bool:
         try:
             boot_done = await _adb_shell_output(adb, serial, "getprop sys.boot_completed", env)
             anim_done = await _adb_shell_output(adb, serial, "getprop init.svc.bootanim", env)
-            if boot_done.strip() == "1" and anim_done.strip() == "stopped":
+            boot = boot_done.strip()
+            anim = anim_done.strip()
+
+            if reconnected_at is None and boot in ("", "0"):
+                reconnected_at = time.monotonic()
+            if anim == "running":
+                saw_boot_anim_running = True
+
+            if boot == "1" and anim == "stopped":
+                if after_reboot and reconnected_at is not None:
+                    uptime = time.monotonic() - reconnected_at
+                    if uptime < min_uptime:
+                        await asyncio.sleep(poll_sec)
+                        continue
+                    if not saw_boot_anim_running and uptime < min_uptime * 2:
+                        await asyncio.sleep(poll_sec)
+                        continue
                 return True
         except Exception:
             pass
-        await asyncio.sleep(3)
+        await asyncio.sleep(poll_sec)
 
     detail = _emulator_stderr_snippet(ds)
     msg = "Emulator boot timed out."
@@ -154,11 +236,14 @@ async def _adb_shell_output(adb: str, serial: str, cmd: str, env: dict) -> str:
 
 async def _broadcast_state(ds: DeviceState, state: str, msg: str = "") -> None:
     ds.state = state
+    if msg:
+        ds.status_msg = msg
     ds.error_msg = msg if state == "error" else ""
     await app_state.broadcast(ds.index, {
-        "type":      "state",
-        "state":     ds.state,
-        "error_msg": ds.error_msg,
+        "type":       "state",
+        "state":      ds.state,
+        "status_msg": ds.status_msg,
+        "error_msg":  ds.error_msg,
     })
 
 
