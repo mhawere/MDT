@@ -81,7 +81,66 @@ async def test_invalid_apk_dir_returns_400():
 
 @pytest.mark.asyncio
 async def test_unknown_test_returns_404():
+    from app.state import DeviceState, app_state
+
+    saved = list(app_state.devices)
+    app_state.devices = [d for d in app_state.devices if d.index != 0]
+    ds = DeviceState(
+        index=0,
+        serial=config.emulator_serial(0),
+        avd_name="mdt_0",
+        active=True,
+        package="com.example.test",
+        state="running",
+    )
+    app_state.register_device(ds)
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            res = await client.post("/api/device/0/tests/not_a_real_test")
+        assert res.status_code == 404
+    finally:
+        app_state.devices = saved
+
+
+@pytest.mark.asyncio
+async def test_api_browse_default():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        res = await client.post("/api/device/0/tests/not_a_real_test")
-    assert res.status_code == 404
+        res = await client.get("/api/browse")
+    assert res.status_code == 200
+    data = res.json()
+    assert "path" in data
+    assert "directories" in data
+    assert "apk_count" in data
+    assert isinstance(data["directories"], list)
+
+
+@pytest.mark.asyncio
+async def test_api_browse_project_root():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/browse", params={"path": str(config.PROJECT_ROOT)})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["path"] == str(config.PROJECT_ROOT.resolve())
+
+
+@pytest.mark.asyncio
+async def test_api_activity():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/activity")
+    assert res.status_code == 200
+    data = res.json()
+    assert "entries" in data
+    assert isinstance(data["entries"], list)
+
+
+@pytest.mark.asyncio
+async def test_api_activity_clear():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/api/activity/clear")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
