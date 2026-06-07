@@ -28,6 +28,8 @@ import app.apk_tests as apk_tests_mod
 import app.live_reload as live_reload_mod
 import app.activity_log as activity_log_mod
 import app.browse as browse_mod
+from app.sdk import ensure_sdk_ready
+from app.sdk_config import SDK_NOT_CONFIGURED_MSG, SdkNotReadyError, detect_sdk_candidates, get_sdk_status, set_sdk_path
 
 
 # ── Session timestamp (once per server start) ─────────────────────────────────
@@ -39,6 +41,10 @@ _reboot_locks: dict[int, asyncio.Lock] = {}
 
 
 class ApkDirPayload(BaseModel):
+    path: str
+
+
+class SdkPathPayload(BaseModel):
     path: str
 
 
@@ -196,6 +202,7 @@ async def _orchestrate_device(ds: DeviceState, stagger_sec: float = 0) -> None:
 
     try:
         _ensure_resources_adapted()
+        ensure_sdk_ready()
 
         avd_mod.ensure_avd(ds.index)
 
@@ -230,8 +237,13 @@ async def _orchestrate_device(ds: DeviceState, stagger_sec: float = 0) -> None:
             name=f"streamer_{ds.index}",
         )
 
-    except Exception as exc:
+    except SdkNotReadyError as exc:
         await _emit_state(ds, "error", str(exc)[:400])
+    except Exception as exc:
+        msg = str(exc)[:400]
+        if "avdmanager" in msg.lower() or "no such file" in msg.lower():
+            msg = SDK_NOT_CONFIGURED_MSG
+        await _emit_state(ds, "error", msg)
 
 
 async def _emit_state(ds: DeviceState, state: str, msg: str = "") -> None:
@@ -258,6 +270,10 @@ async def _emit_state(ds: DeviceState, state: str, msg: str = "") -> None:
 
 async def _startup() -> None:
     """Scan APKs and kick off background orchestration for each device."""
+    from app.sdk_config import apply_sdk_root, refresh_tool_paths, resolve_sdk_root
+
+    apply_sdk_root(resolve_sdk_root())
+    refresh_tool_paths()
     _ensure_resources_adapted()
     await activity_log_mod.activity_log.emit(
         "info",
@@ -351,6 +367,11 @@ async def _open_device_slot(ds: DeviceState) -> None:
     """Open a closed slot and boot an emulator with the next available APK."""
     if ds.active:
         raise HTTPException(status_code=409, detail="Device slot is already active")
+
+    try:
+        ensure_sdk_ready()
+    except SdkNotReadyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     apks = apk_mod.scan_apks()
     apk_path = _next_unassigned_apk(apks)
@@ -619,6 +640,7 @@ async def list_devices():
 async def get_config():
     apks = apk_mod.scan_apks()
     _ensure_device_slots()
+    sdk = get_sdk_status()
     return {
         "max_devices":    config.MAX_DEVICES,
         "log_dir":        str(config.LOG_OUTPUT_DIR),
@@ -627,7 +649,41 @@ async def get_config():
         "active_devices": len(app_state.active_devices()),
         "session_ts":     SESSION_TS,
         "tests":          apk_tests_mod.list_available_tests(),
+        "sdk":            sdk,
     }
+
+
+@app.get("/api/sdk")
+async def get_sdk():
+    return get_sdk_status()
+
+
+@app.post("/api/sdk")
+async def post_sdk(payload: SdkPathPayload):
+    try:
+        status = set_sdk_path(payload.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await activity_log_mod.activity_log.emit(
+        "success",
+        f"Android SDK set to {status['sdk_root']}",
+        source="sdk",
+    )
+    return {"ok": True, **status}
+
+
+@app.post("/api/sdk/detect")
+async def detect_sdk():
+    candidates = detect_sdk_candidates()
+    best = candidates[0] if candidates else None
+    if best and best.get("valid"):
+        set_sdk_path(best["sdk_root"])
+        await activity_log_mod.activity_log.emit(
+            "success",
+            f"Auto-detected Android SDK at {best['sdk_root']}",
+            source="sdk",
+        )
+    return {"ok": True, "candidates": candidates, "selected": best}
 
 
 @app.get("/api/browse")
