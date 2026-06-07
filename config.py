@@ -11,9 +11,15 @@ DEVICE_PROFILE       = "pixel_5"
 MAX_DEVICES          = 2
 EMULATOR_MEMORY_MB   = 1536
 EMULATOR_BOOT_TIMEOUT= 180   # seconds
+EMULATOR_BOOT_POLL_SEC = 2   # poll interval while waiting for Android boot
 EMULATOR_GPU_MODE    = "host"
 INPUT_SWIPE_MS       = 140
 BOOT_STAGGER_SEC     = 8     # delay between parallel emulator launches
+
+# ── Reboot ────────────────────────────────────────────────────────────────────
+REBOOT_DISCONNECT_TIMEOUT = 45   # wait for adb offline after adb reboot
+REBOOT_MIN_UPTIME_SEC     = 5    # min seconds after reconnect before accepting boot
+REBOOT_MAX_ATTEMPTS       = 3    # consecutive reboot failures before giving up
 
 # ── Streaming ─────────────────────────────────────────────────────────────────
 SCREENRECORD_SIZE        = "540x1170"   # WxH; must match device aspect; None for native
