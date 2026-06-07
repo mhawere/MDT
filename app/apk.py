@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import config
+from app.sdk import aapt2_path_in
 
 
 _APK_SOURCE_FILE = config.PROJECT_ROOT / ".apk_source_dir.txt"
@@ -93,7 +94,7 @@ def resolve_package(apk_path: Path) -> str:
     aapt2_bin: Optional[Path] = None
     if aapt2.exists():
         for ver_dir in sorted(aapt2.iterdir(), reverse=True):
-            candidate = ver_dir / "aapt2"
+            candidate = aapt2_path_in(ver_dir)
             if candidate.exists():
                 aapt2_bin = candidate
                 break
