@@ -3,7 +3,7 @@
 <p align="center"><b>Multi-Device Tester — run two Android apps side-by-side in your browser.</b></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078D6" alt="Cross-platform">
   <img src="https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
   <img src="https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/streaming-H.264%20%2F%20WebCodecs-ff5252" alt="H.264 / WebCodecs">
@@ -24,27 +24,29 @@ Drop your APKs in a folder, run one command, and test. No physical phones, no An
 
 ## Features
 
-- **Two emulators, side-by-side** — one APK per emulator, fully isolated.
+- **Two emulators, side-by-side (`MAX_DEVICES=2`)** — one APK per slot, fully isolated; run one or two at a time.
+- **Dynamic device slots** — close a running emulator to free a slot, then **Add device** to start another APK without restarting the server.
+- **Glass dashboard UI** — responsive layout with device cards, status chips, and a collapsible **activity log** (filter by level, auto-scroll, resize).
+- **APK folder browser** — pick any directory for APK discovery; changes resync automatically (no stale `start.bat` path).
+- **Cross-platform Android SDK** — auto-detect on Linux, macOS, and Windows; manual path + validation in the **SDK** modal; project-local `.android-sdk/` fallback.
 - **Smooth H.264 video** — WebCodecs GPU decode to `<canvas>`, not screenshot polling.
 - **Full interaction** — tap, swipe, type, Back / Home / Recents via adb.
 - **Colour-coded log trails** — live logcat + JSONL/raw persistence in `logs/`.
-- **Built-in APK tests** — launch, crash/ANR detection, permissions, memory, network, UI taps ([docs](docs/BUILTIN_TESTS.md)).
-- **Live reload** — watch Gradle/build output and auto `adb install -r` per device ([docs](docs/LIVE_RELOAD.md)).
-- **Per-device controls** — restart, reinstall, reboot, rotate, screenshot.
-- **One command, self-contained** — Python venv + Android SDK live in the project folder.
+- **Eight built-in APK tests** — launch, crash/ANR detection, permission audit, activity smoke, memory baseline, network connectivity, UI responsiveness ([docs](docs/BUILTIN_TESTS.md)).
+- **Live reload per device** — watch a debug APK path and auto `adb install -r` when the file changes ([docs](docs/LIVE_RELOAD.md)).
+- **Per-device controls** — restart app, reinstall, **reboot with safeguards** (disconnect timeout, min uptime, retry cap), rotate, screenshot.
+- **One command, self-contained** — Python venv + optional project-local SDK.
 - **Memory-aware startup** — auto-lowers per-emulator RAM under pressure (8 GB profile defaults).
 
 ## Requirements
 
-- **Windows 10 or 11**
+- **Windows 10/11, Linux, or macOS**
 - **Python 3.11** (on `PATH` as `py` or `python`)
-- **Hardware acceleration (WHPX)** — enable once in admin PowerShell, then reboot:
-  ```powershell
-  Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All
-  ```
+- **JDK 17+** (`java` on PATH)
+- **Hardware acceleration** — WHPX (Windows), KVM (Linux), or Hypervisor (macOS)
 - **Chromium browser** — Chrome or Edge (WebCodecs required).
 - **~4–8 GB free RAM** for two emulators at default settings.
-- **Internet on first run** — MDT downloads cmdline-tools and a system image into `.android-sdk/`.
+- **Android SDK** — auto-detected, configured in the UI, or bootstrapped into `.android-sdk/` on first run.
 
 ## Quick start
 
@@ -60,14 +62,30 @@ The **first run is slow** (SDK + system image download + cold boot). Subsequent 
 
 ## Usage
 
-1. Drop up to **two** `.apk` files into `apk_input/`.
-2. Run `.\start.bat`.
-3. Watch each pane boot → install → launch.
-4. Open the **Tests** tab on any device to run built-in APK checks.
+1. Drop up to **two** `.apk` files into `apk_input/`, or use **Browse APK folder** in the header to point at your build output directory.
+2. Run `.\start.bat` (Windows) or `python run.py` / `.venv/bin/uvicorn app.main:app --reload` (Linux/macOS dev).
+3. Open **http://localhost:8000** — confirm the SDK chip is green (use **SDK** → Auto-detect or set path if needed).
+4. Watch each pane boot → install → launch; use the **activity log** for cross-device events.
+5. Open the **Tests** tab on any device to run all **8** built-in checks, or run individually.
+6. Optional: close a device slot (× on the card) to stop one emulator, then **Add device** when you have another APK ready.
 
 Logs: `logs/<apk-name>_<timestamp>.jsonl` and `.log`.
 
 If `apk_input/` is empty, the server starts and waits — add APKs and they are picked up within a few seconds.
+
+## Dashboard & UI
+
+| Area | What it does |
+| --- | --- |
+| **Header** | SDK status chip, **SDK** settings modal, **Browse APK folder**, activity log toggle, global actions. |
+| **Device cards** | Stream canvas, tabs (Screen / Logs / Tests), live reload, per-device reboot/reinstall. |
+| **Closed slot** | Placeholder card with **Add device** when a slot was closed or no APK is assigned yet. |
+| **Activity log** | Unified timeline (info / warn / error filters, clear, drag-to-resize). |
+| **Folder modal** | Navigate home, breadcrumbs, select directory for APK scanning. |
+| **SDK modal** | Path input, browse, auto-detect, required-tool checklist (`adb`, `emulator`, `sdkmanager`, etc.). |
+
+Layout is **responsive**: cards stack on narrow viewports and sit side-by-side on wide screens.
+
 
 ## Configuration
 
@@ -85,9 +103,37 @@ Tunables live in **`config.py`** (see also `.env.example` for reference):
 | `EMULATOR_GPU_MODE` | `host` | GPU mode for emulator. |
 | `SERVER_PORT` | `8000` | Local web UI port. |
 
+### Android SDK path
+
+MDT resolves the SDK in this order:
+
+1. **Saved path** — `.sdk_path.txt` in the project root (set via **SDK** button in the UI)
+2. **Environment** — `MDT_ANDROID_SDK`, then `ANDROID_SDK_ROOT`, then `ANDROID_HOME`
+3. **OS defaults** — `~/Android/Sdk` (Linux), `~/Library/Android/sdk` (macOS), `%LOCALAPPDATA%\Android\Sdk` (Windows)
+4. **Project fallback** — `.android-sdk/` (auto-downloads cmdline-tools and packages on first run)
+
+Use the **SDK** button in the header to browse for your SDK root, or click **Auto-detect**. The SDK chip shows green when ready, red when tools are missing.
+
+On Windows, enable WHPX once in admin PowerShell, then reboot:
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -All
+```
+
 ### 8 GB RAM profile
 
 Defaults are tuned for ~8 GB host RAM: 1536 MB/emulator, 540×1170 stream, 2 Mbps bitrate, staggered boots. If emulators fail to start, lower `EMULATOR_MEMORY_MB` further or run one APK at a time.
+
+### Reboot safeguards
+
+Reboot is available per device from the UI. `config.py` limits flaky adb states:
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `REBOOT_DISCONNECT_TIMEOUT` | `45` | Seconds to wait for adb offline after reboot. |
+| `REBOOT_MIN_UPTIME_SEC` | `5` | Minimum uptime after reconnect before boot is accepted. |
+| `REBOOT_MAX_ATTEMPTS` | `3` | Consecutive reboot failures before giving up. |
+
 
 ## Built-in tests
 
@@ -177,6 +223,7 @@ MDT/
 │   ├── apk_tests.py     # built-in test framework
 │   ├── live_reload.py   # per-device hot reload watcher
 │   ├── sdk.py           # Android SDK bootstrap
+│   ├── sdk_config.py    # SDK path resolution & validation
 │   ├── emulator.py      # headless launch + boot wait
 │   ├── device.py        # adb wrappers
 │   └── ...
@@ -188,7 +235,6 @@ MDT/
 
 ## Known limitations
 
-- **Windows-focused** — acceleration uses WHPX.
 - **Chromium only** — WebCodecs required.
 - **Stream latency ~0.5–1 s** — fine for functional QA, not timing benchmarks.
 - **Emulators only** — no physical-device support yet.
@@ -197,15 +243,29 @@ MDT/
 
 ```bash
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
-pytest tests/ -q
+# Windows: .venv\Scripts\pip install -r requirements.txt
+# Linux/macOS:
+.venv/bin/pip install -r requirements.txt
+
+.venv/bin/pytest tests/ -q   # 57+ tests (SDK, slots, reboot, live reload, smoke)
 python -c "from app.main import app; print('OK')"
+python run.py              # boots SDK check + uvicorn on SERVER_PORT
 ```
+
+Copy `.env.example` to `.env` if your tooling loads env files; most tunables remain in `config.py`.
+
+Key REST additions for slots and SDK:
+
+- `POST /api/device/{index}/close` — stop emulator and mark slot closed
+- `POST /api/device/{index}/open` — boot APK in a closed slot
+- `GET|POST /api/sdk`, `POST /api/sdk/detect` — SDK path status and auto-detect
+- `GET /api/browse`, `POST /api/apk_dir` — folder browser and APK source directory
+- `GET /api/activity`, `POST /api/activity/clear` — global activity log
 
 
 ## Contributors
 
-- [**Josaphat12-tech**](https://github.com/Josaphat12-tech) — audit fixes, two-device layout, built-in APK tests, live reload, and pytest/test improvements. See [CONTRIBUTORS.md](CONTRIBUTORS.md).
+- [**Josaphat12-tech**](https://github.com/Josaphat12-tech) — cross-platform SDK config, glass dashboard UI, device slots, APK folder resync, reboot safeguards, built-in tests, live reload, and pytest coverage. See [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ## License
 
