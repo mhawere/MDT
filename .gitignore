@@ -26,3 +26,12 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Cursor / pytest caches
+.cursor/
+.cursor-cache/
+.pytest_cache/
+
+# Runtime directories (created at run time)
+logs/
+apk_input/
