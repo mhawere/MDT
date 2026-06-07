@@ -10,6 +10,16 @@
 const WS_RECONNECT_BASE_MS = 1500;
 const WS_RECONNECT_MAX_MS  = 15000;
 const MAX_LOG_LINES        = 1000; // DOM line limit per device (trim oldest)
+const TEST_LABELS = {
+  launch: 'Launch',
+  crash_detection: 'Crash',
+  anr_detection: 'ANR',
+  permission_audit: 'Permissions',
+  activity_smoke: 'Activity',
+  memory_baseline: 'Memory',
+  network_connectivity: 'Network',
+  ui_responsiveness: 'UI Tap',
+};
 const TAP_THRESHOLD         = 0.004;
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -240,7 +250,7 @@ function renderEmptyState() {
         <line x1="9" y1="11" x2="13" y2="11"/>
       </svg>
       <h2>No APKs detected</h2>
-      <p>Drop up to <strong>3 APK files</strong> into the <code>apk_input/</code> folder, then refresh or restart MDT.</p>
+      <p>Drop up to <strong>2 APK files</strong> into the <code>apk_input/</code> folder, then refresh or restart MDT.</p>
       <p style="font-size:12px; color: var(--text-muted);">The server is running and waiting.</p>
     </div>`;
   document.getElementById('global-status').textContent = 'No APKs';
@@ -313,7 +323,10 @@ class DeviceUI {
     this.ws      = null;
     this.wsRetry = 0;
 
-    // Log state
+    // Test state
+    this.testResults = [];
+    this.testRunning = false;
+    this.testPollTimer = null;
     this.logFilter    = 'all';
     this.logAutoScroll = true;
     this.logLines     = [];   // {el, color} for filter toggling
@@ -367,6 +380,7 @@ class DeviceUI {
       <div class="view-toggle" id="toggle-${this.index}">
         <button class="active"  data-view="screen" id="vbtn-screen-${this.index}">Screen</button>
         <button                 data-view="logs"   id="vbtn-logs-${this.index}">Logs</button>
+        <button                 data-view="tests"  id="vbtn-tests-${this.index}">Tests</button>
         <button                 data-view="split"  id="vbtn-split-${this.index}">Split</button>
       </div>
 
@@ -379,6 +393,7 @@ class DeviceUI {
     // Build the three view panes (hidden until toggled)
     this._buildScreenPane();
     this._buildLogPane();
+    this._buildTestPane();
     this._setView('screen');
 
     // View toggle wiring
@@ -444,6 +459,119 @@ class DeviceUI {
     this._wireDeviceControls();
   }
 
+  _buildTestPane() {
+    const tests = globalConfig.tests || Object.keys(TEST_LABELS);
+    this.testPane = document.createElement('div');
+    this.testPane.className = 'test-pane';
+    this.testPane.innerHTML = `
+      <div class="test-panel">
+        <div class="test-panel-header">
+          <span class="test-panel-title">Built-in APK Tests</span>
+          <button class="test-run-all" id="btn-run-all-tests-${this.index}">Run All</button>
+        </div>
+        <div class="test-buttons" id="test-buttons-${this.index}">
+          ${tests.map(t => `<button class="test-btn" data-test="${t}" id="tbtn-${t}-${this.index}">${TEST_LABELS[t] || t}</button>`).join('')}
+        </div>
+        <div class="test-results" id="test-results-${this.index}">
+          <div class="test-result-line running">No tests run yet.</div>
+        </div>
+      </div>`;
+
+    this.testPane.querySelector(`#btn-run-all-tests-${this.index}`)
+      .addEventListener('click', () => this._runTests(null));
+    this.testPane.querySelectorAll('.test-btn').forEach(btn => {
+      btn.addEventListener('click', () => this._runTests([btn.dataset.test]));
+    });
+  }
+
+  async _runTests(testNames) {
+    if (this.testRunning) {
+      showToast('Tests already running on this device', 'warn');
+      return;
+    }
+    this.testRunning = true;
+    this.testResults = [];
+    this._renderTestResults([{ test: '…', status: 'running', message: 'Starting…' }]);
+
+    const url = testNames
+      ? `/api/device/${this.index}/tests/run`
+      : `/api/device/${this.index}/tests/run`;
+    const body = testNames ? JSON.stringify({ tests: testNames }) : JSON.stringify({});
+
+    try {
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      this._startTestPoll();
+    } catch (e) {
+      this.testRunning = false;
+      this._renderTestResults([{ test: 'error', status: 'error', message: String(e.message || e) }]);
+      showToast(`Device ${this.index}: test failed to start`, 'error');
+    }
+  }
+
+  _startTestPoll() {
+    if (this.testPollTimer) clearInterval(this.testPollTimer);
+    this.testPollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/device/${this.index}/tests/status`);
+        const data = await res.json();
+        if (data.results && data.results.length) {
+          this._renderTestResults(data.results, data.current_test);
+        }
+        if (data.status === 'passed' || data.status === 'failed' || data.status === 'idle') {
+          if (data.status !== 'idle') {
+            this._renderTestResults(data.results || []);
+            showToast(`Device ${this.index}: tests ${data.status}`, data.status === 'passed' ? '' : 'warn');
+          }
+          this.testRunning = false;
+          clearInterval(this.testPollTimer);
+          this.testPollTimer = null;
+        }
+      } catch (_) {}
+    }, 800);
+  }
+
+  _renderTestResults(results, currentTest) {
+    const el = this.testPane?.querySelector(`#test-results-${this.index}`);
+    if (!el) return;
+    if (!results || !results.length) {
+      el.innerHTML = '<div class="test-result-line running">No results yet.</div>';
+      return;
+    }
+    el.innerHTML = results.map(r => {
+      const cls = r.status === 'passed' ? 'passed'
+        : r.status === 'failed' ? 'failed'
+        : r.status === 'error' ? 'error' : 'running';
+      const dur = r.duration_ms != null ? ` (${r.duration_ms}ms)` : '';
+      return `<div class="test-result-line ${cls}"><span>${_esc(r.test || '?')}</span><span>${_esc(r.message || r.status || '')}${dur}</span></div>`;
+    }).join('');
+    if (currentTest) {
+      el.innerHTML += `<div class="test-result-line running">Running: ${_esc(currentTest)}…</div>`;
+    }
+    this.testPane.querySelectorAll('.test-btn').forEach(btn => {
+      btn.classList.toggle('running', btn.dataset.test === currentTest);
+    });
+  }
+
+  _onTest(msg) {
+    if (msg.event === 'result') {
+      const idx = this.testResults.findIndex(r => r.test === msg.test);
+      const entry = { test: msg.test, status: msg.status, message: msg.message, duration_ms: msg.duration_ms };
+      if (idx >= 0) this.testResults[idx] = entry;
+      else this.testResults.push(entry);
+      this._renderTestResults(this.testResults, msg.current_test);
+    } else if (msg.event === 'progress') {
+      this._renderTestResults(this.testResults, msg.current_test);
+    } else if (msg.event === 'run_complete') {
+      this.testResults = msg.results || [];
+      this.testRunning = false;
+      this._renderTestResults(this.testResults);
+    }
+  }
+
   _buildLogPane() {
     this.logPane = document.createElement('div');
     this.logPane.className = 'log-pane';
@@ -483,6 +611,8 @@ class DeviceUI {
       body.appendChild(this.screenPane);
     } else if (view === 'logs') {
       body.appendChild(this.logPane);
+    } else if (view === 'tests') {
+      body.appendChild(this.testPane);
     } else {
       // split
       const wrap = document.createElement('div');
@@ -667,6 +797,7 @@ class DeviceUI {
       case 'log':      this._onLog(msg);           break;
       case 'state':    this._onState(msg);         break;
       case 'counters': this._onCounters(msg);      break;
+      case 'test':     this._onTest(msg);          break;
       case 'ping':     break; // keepalive
     }
   }

@@ -10,15 +10,15 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 import config
-from app.sdk import _sdk_env
+from app.adb_util import adb_bin, adb_env
 
 
 def _adb() -> str:
-    return str(config.ANDROID_SDK_ROOT / "platform-tools" / "adb.exe")
+    return adb_bin()
 
 
 def _env() -> dict:
-    return _sdk_env()
+    return adb_env()
 
 
 # ── Sync helpers (used outside async context) ─────────────────────────────────

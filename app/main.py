@@ -5,12 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import ctypes
+import platform
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,108 +24,69 @@ import app.emulator as emulator
 import app.logs as logs_mod
 import app.streamer as streamer_mod
 import app.apk as apk_mod
+import app.apk_tests as apk_tests_mod
 
 
 # ── Session timestamp (once per server start) ─────────────────────────────────
 SESSION_TS = datetime.now().strftime("%Y%m%d_%H%M%S")
 _apk_sync_lock = asyncio.Lock()
 _apk_watcher_task: asyncio.Task | None = None
+_resources_adapted = False
 
 
 class ApkDirPayload(BaseModel):
     path: str
 
-# ── Orchestration ─────────────────────────────────────────────────────────────
 
-async def _orchestrate_device(ds: DeviceState) -> None:
-    """
-    Full device lifecycle: ensure AVD → launch emulator → wait boot →
-    install APK → launch app → start logcat + screencap.
-    Errors are isolated to this device; others continue.
-    """
-    # Don't boot an emulator if we already know this device is broken (e.g. unresolvable package)
-    if ds.state == "error":
-        await app_state.broadcast(ds.index, {"type": "state", **ds.to_dict()})
-        return
+class TestRunPayload(BaseModel):
+    tests: list[str] | None = None
 
+
+def _mem_available_mb() -> int:
+    """Cross-platform available memory probe."""
     try:
-        # 1. Ensure AVD exists
-        avd_mod.ensure_avd(ds.index)
+        import psutil
+        return int(psutil.virtual_memory().available // (1024 * 1024))
+    except Exception:
+        pass
 
-        # 2. Launch headless emulator
-        await _emit_state(ds, "booting", "Starting emulator…")
-        emulator.launch_emulator(ds)
+    if sys.platform == "win32":
+        try:
+            import ctypes
 
-        # 3. Wait for boot
-        booted = await emulator.wait_for_boot(ds)
-        if not booted:
-            return  # state already set to error inside wait_for_boot
+            class MS(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
 
-        # 4. Get screen dimensions
-        ds.screen_w, ds.screen_h = await device.get_screen_size(ds.serial)
+            s = MS()
+            s.dwLength = ctypes.sizeof(MS)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s))
+            return int(s.ullAvailPhys // (1024 * 1024))
+        except Exception:
+            pass
 
-        if ds.apk_path is None:
-            # No APK — just show the emulator screen
-            await _emit_state(ds, "running", "")
-        else:
-            # 5. Install APK
-            await _emit_state(ds, "installing", f"Installing {ds.apk_path.name}…")
-            ok, out = await device.install_apk(ds.serial, ds.apk_path)
-            if not ok:
-                await _emit_state(ds, "error", f"Install failed: {out[-300:]}")
-                return
+    if platform.system() == "Linux":
+        try:
+            with open("/proc/meminfo", encoding="utf-8") as f:
+                info = {}
+                for line in f:
+                    key, val = line.split(":", 1)
+                    info[key.strip()] = int(val.strip().split()[0])
+            avail = info.get("MemAvailable") or info.get("MemFree", 0)
+            return int(avail // 1024)
+        except Exception:
+            pass
 
-            # 6. Launch app
-            await device.launch_app(ds.serial, ds.package or "")
-            await _emit_state(ds, "running", "")
-
-            # 7. Start logcat
-            ds.logcat_task = asyncio.create_task(
-                logs_mod.run_logcat(ds, SESSION_TS),
-                name=f"logcat_{ds.index}",
-            )
-
-        # 8. Start screen streamer
-        ds.streamer_task = asyncio.create_task(
-            streamer_mod.stream_screen(ds),
-            name=f"streamer_{ds.index}",
-        )
-
-    except Exception as exc:
-        await _emit_state(ds, "error", str(exc)[:400])
-
-
-async def _emit_state(ds: DeviceState, state: str, msg: str = "") -> None:
-    ds.state = state
-    ds.status_msg = msg
-    ds.error_msg = msg if state == "error" else ""
-    await app_state.broadcast(ds.index, {
-        "type":      "state",
-        "state":     ds.state,
-        "status_msg": ds.status_msg,
-        "error_msg": ds.error_msg,
-        **ds.to_dict(),
-    })
-
-
-def _win_mem_available_mb() -> int:
-    class MS(ctypes.Structure):
-        _fields_ = [
-            ("dwLength", ctypes.c_ulong),
-            ("dwMemoryLoad", ctypes.c_ulong),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
-
-    s = MS()
-    s.dwLength = ctypes.sizeof(MS)
-    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(s))
-    return int(s.ullAvailPhys // (1024 * 1024))
+    return 8192
 
 
 def _adapt_startup_resources(requested_devices: int) -> int:
@@ -135,7 +97,7 @@ def _adapt_startup_resources(requested_devices: int) -> int:
     if requested_devices <= 0:
         return 0
 
-    available_mb = _win_mem_available_mb()
+    available_mb = _mem_available_mb()
 
     reserve_mb = 2048
     per_device_overhead_mb = 700
@@ -163,8 +125,118 @@ def _adapt_startup_resources(requested_devices: int) -> int:
     return requested_devices
 
 
+def _ensure_resources_adapted() -> None:
+    global _resources_adapted
+    if _resources_adapted:
+        return
+    _adapt_startup_resources(config.MAX_DEVICES)
+    _resources_adapted = True
+
+
+def _get_device_or_404(index: int) -> DeviceState:
+    ds = app_state.get(index)
+    if not ds:
+        raise HTTPException(status_code=404, detail=f"Device index {index} not found")
+    return ds
+
+
+async def _cancel_task(task: asyncio.Task | None, timeout: float = 2) -> None:
+    if task and not task.done():
+        task.cancel()
+        try:
+            await asyncio.wait_for(task, timeout=timeout)
+        except Exception:
+            pass
+
+
+async def _restart_streamer(ds: DeviceState) -> None:
+    await _cancel_task(ds.streamer_task)
+    ds.streamer_task = asyncio.create_task(
+        streamer_mod.stream_screen(ds),
+        name=f"streamer_{ds.index}",
+    )
+
+
+async def _restart_logcat(ds: DeviceState) -> None:
+    await _cancel_task(ds.logcat_task)
+    if ds.package:
+        ds.logcat_task = asyncio.create_task(
+            logs_mod.run_logcat(ds, SESSION_TS),
+            name=f"logcat_{ds.index}",
+        )
+
+
+# ── Orchestration ─────────────────────────────────────────────────────────────
+
+async def _orchestrate_device(ds: DeviceState, stagger_sec: float = 0) -> None:
+    """
+    Full device lifecycle: ensure AVD → launch emulator → wait boot →
+    install APK → launch app → start logcat + screencap.
+    Errors are isolated to this device; others continue.
+    """
+    if ds.state == "error":
+        await app_state.broadcast(ds.index, {"type": "state", **ds.to_dict()})
+        return
+
+    if stagger_sec > 0:
+        await asyncio.sleep(stagger_sec)
+
+    try:
+        _ensure_resources_adapted()
+
+        avd_mod.ensure_avd(ds.index)
+
+        await _emit_state(ds, "booting", "Starting emulator…")
+        emulator.launch_emulator(ds)
+
+        booted = await emulator.wait_for_boot(ds)
+        if not booted:
+            return
+
+        ds.screen_w, ds.screen_h = await device.get_screen_size(ds.serial)
+
+        if ds.apk_path is None:
+            await _emit_state(ds, "running", "")
+        else:
+            await _emit_state(ds, "installing", f"Installing {ds.apk_path.name}…")
+            ok, out = await device.install_apk(ds.serial, ds.apk_path)
+            if not ok:
+                await _emit_state(ds, "error", f"Install failed: {out[-300:]}")
+                return
+
+            await device.launch_app(ds.serial, ds.package or "")
+            await _emit_state(ds, "running", "")
+
+            ds.logcat_task = asyncio.create_task(
+                logs_mod.run_logcat(ds, SESSION_TS),
+                name=f"logcat_{ds.index}",
+            )
+
+        ds.streamer_task = asyncio.create_task(
+            streamer_mod.stream_screen(ds),
+            name=f"streamer_{ds.index}",
+        )
+
+    except Exception as exc:
+        await _emit_state(ds, "error", str(exc)[:400])
+
+
+async def _emit_state(ds: DeviceState, state: str, msg: str = "") -> None:
+    ds.state = state
+    ds.status_msg = msg
+    ds.error_msg = msg if state == "error" else ""
+    await app_state.broadcast(ds.index, {
+        "type":      "state",
+        "state":     ds.state,
+        "status_msg": ds.status_msg,
+        "error_msg": ds.error_msg,
+        **ds.to_dict(),
+    })
+
+
 async def _startup() -> None:
     """Scan APKs and kick off background orchestration for each device."""
+    _ensure_resources_adapted()
     await _sync_devices_from_apk_dir(initial=True)
 
 
@@ -182,14 +254,15 @@ async def _sync_devices_from_apk_dir(initial: bool = False) -> None:
             if ds.apk_path is not None and ds.apk_path.exists()
         }
 
+        new_devices: list[DeviceState] = []
         for apk_path in apks:
             key = str(apk_path.resolve())
             if key in existing:
                 continue
-            if len(app_state.devices) >= config.MAX_DEVICES:
+            if len(app_state.devices) + len(new_devices) >= config.MAX_DEVICES:
                 break
 
-            i = len(app_state.devices)
+            i = len(app_state.devices) + len(new_devices)
             try:
                 package = apk_mod.resolve_package(apk_path)
             except Exception as exc:
@@ -206,13 +279,19 @@ async def _sync_devices_from_apk_dir(initial: bool = False) -> None:
                 package=package,
             )
             app_state.register_device(ds)
+            new_devices.append(ds)
 
             if package is None:
                 ds.state = "error"
                 ds.error_msg = f"Cannot parse package name from {apk_path.name}"
                 ds.status_msg = ds.error_msg
 
-            asyncio.create_task(_orchestrate_device(ds), name=f"orchestrate_{i}")
+        for idx, ds in enumerate(new_devices):
+            stagger = idx * config.BOOT_STAGGER_SEC
+            asyncio.create_task(
+                _orchestrate_device(ds, stagger_sec=stagger),
+                name=f"orchestrate_{ds.index}",
+            )
 
 
 async def _watch_apk_dir() -> None:
@@ -238,12 +317,10 @@ async def _shutdown() -> None:
             pass
     tasks = []
     for ds in app_state.devices:
-        # Cancel logcat + streamer tasks
         for task in (ds.logcat_task, ds.streamer_task):
             if task and not task.done():
                 task.cancel()
 
-        # Stop logcat subprocess if any
         if ds.logcat_proc and hasattr(ds.logcat_proc, "returncode"):
             if ds.logcat_proc.returncode is None:
                 try:
@@ -269,7 +346,7 @@ async def lifespan(app: FastAPI):
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Multi-Device Tester", lifespan=lifespan)
+app = FastAPI(title="MDT — Multi-Device Tester", lifespan=lifespan)
 
 _STATIC = Path(__file__).parent.parent / "static"
 app.mount("/static", StaticFiles(directory=str(_STATIC)), name="static")
@@ -294,12 +371,16 @@ async def get_config():
         "log_dir":     str(config.LOG_OUTPUT_DIR),
         "apk_dir":     str(apk_mod.get_apk_dir()),
         "session_ts":  SESSION_TS,
+        "tests":       apk_tests_mod.list_available_tests(),
     }
 
 
 @app.post("/api/apk_dir")
 async def set_apk_dir(payload: ApkDirPayload):
-    p = apk_mod.set_apk_dir(Path(payload.path))
+    try:
+        p = apk_mod.set_apk_dir(Path(payload.path))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _sync_devices_from_apk_dir(initial=False)
     return {"ok": True, "apk_dir": str(p)}
 
@@ -308,9 +389,9 @@ async def set_apk_dir(payload: ApkDirPayload):
 
 @app.post("/api/device/{index}/restart_app")
 async def restart_app(index: int):
-    ds = app_state.get(index)
-    if not ds or not ds.package:
-        return {"ok": False, "msg": "Device or package not found"}
+    ds = _get_device_or_404(index)
+    if not ds.package:
+        raise HTTPException(status_code=400, detail="Device has no package")
     await device.adb_shell(ds.serial, f"am force-stop {ds.package}")
     await asyncio.sleep(1)
     await device.launch_app(ds.serial, ds.package)
@@ -319,9 +400,9 @@ async def restart_app(index: int):
 
 @app.post("/api/device/{index}/reinstall")
 async def reinstall(index: int):
-    ds = app_state.get(index)
-    if not ds or not ds.apk_path:
-        return {"ok": False, "msg": "Device or APK not found"}
+    ds = _get_device_or_404(index)
+    if not ds.apk_path:
+        raise HTTPException(status_code=400, detail="Device has no APK")
     await _emit_state(ds, "installing", "Reinstalling…")
     ok, out = await device.install_apk(ds.serial, ds.apk_path)
     if ok:
@@ -334,9 +415,7 @@ async def reinstall(index: int):
 
 @app.post("/api/device/{index}/reboot")
 async def reboot_device_ep(index: int):
-    ds = app_state.get(index)
-    if not ds:
-        return {"ok": False}
+    ds = _get_device_or_404(index)
     await _emit_state(ds, "booting", "Rebooting device…")
     await device.reboot_device(ds.serial)
     asyncio.create_task(_wait_and_relaunch(ds), name=f"reboot_{index}")
@@ -344,31 +423,39 @@ async def reboot_device_ep(index: int):
 
 
 async def _wait_and_relaunch(ds: DeviceState) -> None:
+    await _cancel_task(ds.streamer_task)
+    await _cancel_task(ds.logcat_task)
+
     booted = await emulator.wait_for_boot(ds)
-    if booted and ds.apk_path:
+    if not booted:
+        return
+
+    ds.screen_w, ds.screen_h = await device.get_screen_size(ds.serial)
+
+    if ds.apk_path:
         await device.install_apk(ds.serial, ds.apk_path)
         await device.launch_app(ds.serial, ds.package or "")
-        await _emit_state(ds, "running", "")
+
+    await _emit_state(ds, "running", "")
+
+    if ds.package:
+        await _restart_logcat(ds)
+    await _restart_streamer(ds)
 
 
 @app.post("/api/device/{index}/rotate")
 async def rotate(index: int):
-    ds = app_state.get(index)
-    if not ds:
-        return {"ok": False}
+    ds = _get_device_or_404(index)
     rot = getattr(ds, "_rotation", 0)
     new_rot = await device.rotate_screen(ds.serial, rot)
     ds._rotation = new_rot  # type: ignore[attr-defined]
-    if ds.streamer_task and not ds.streamer_task.done():
-        ds.streamer_task.cancel()
-        try:
-            await asyncio.wait_for(ds.streamer_task, timeout=2)
-        except Exception:
-            pass
-    ds.streamer_task = asyncio.create_task(
-        streamer_mod.stream_screen(ds),
-        name=f"streamer_{index}",
-    )
+
+    ds.screen_w, ds.screen_h = await device.get_screen_size(ds.serial)
+
+    await _cancel_task(ds.streamer_task)
+    await _restart_streamer(ds)
+    await _restart_logcat(ds)
+
     return {"ok": True, "rotation": new_rot}
 
 
@@ -394,6 +481,68 @@ async def reinstall_all():
     return {"results": results}
 
 
+# ── APK test endpoints ────────────────────────────────────────────────────────
+
+@app.get("/api/device/{index}/tests")
+async def list_tests(index: int):
+    _get_device_or_404(index)
+    return {"tests": apk_tests_mod.list_available_tests()}
+
+
+@app.get("/api/device/{index}/tests/status")
+async def test_status(index: int):
+    _get_device_or_404(index)
+    run = apk_tests_mod.get_run_state(index)
+    if not run:
+        return {"status": "idle", "results": []}
+    return {
+        "run_id": run.run_id,
+        "status": run.status,
+        "current_test": run.current_test,
+        "tests": run.tests,
+        "results": run.results,
+        "duration_ms": int((run.finished_at or __import__("time").time()) - run.started_at) * 1000,
+    }
+
+
+@app.post("/api/device/{index}/tests/run")
+async def run_tests(index: int, payload: TestRunPayload | None = None):
+    ds = _get_device_or_404(index)
+    if ds.state not in ("running", "installing"):
+        raise HTTPException(status_code=409, detail=f"Device not ready (state={ds.state})")
+    try:
+        run = await apk_tests_mod.run_tests(ds, payload.tests if payload else None)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "run_id": run.run_id,
+        "tests": run.tests,
+        "status": run.status,
+    }
+
+
+@app.post("/api/device/{index}/tests/{test_name}")
+async def run_single_test(index: int, test_name: str):
+    ds = _get_device_or_404(index)
+    if ds.state not in ("running", "installing"):
+        raise HTTPException(status_code=409, detail=f"Device not ready (state={ds.state})")
+    if test_name not in apk_tests_mod.ALL_TESTS:
+        raise HTTPException(status_code=404, detail=f"Unknown test: {test_name}")
+    try:
+        run = await apk_tests_mod.run_single_test(ds, test_name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "run_id": run.run_id,
+        "tests": run.tests,
+        "status": run.status,
+    }
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{index}")
@@ -401,22 +550,30 @@ async def device_ws(websocket: WebSocket, index: int):
     """
     Multiplexed per-device WebSocket.
     Receives JSON commands (tap, swipe, text, key) from the browser.
-    Sends JSON messages (frame, log, state, counters) to the browser.
+    Sends JSON messages (frame, log, state, counters, test) to the browser.
     """
     await websocket.accept()
     await app_state.add_ws(index, websocket)
 
-    # Send current state immediately on connect
     ds = app_state.get(index)
     if ds:
         await websocket.send_json({"type": "state", **ds.to_dict()})
+        run = apk_tests_mod.get_run_state(index)
+        if run and run.status == "running":
+            await websocket.send_json({
+                "type": "test",
+                "event": "progress",
+                "run_id": run.run_id,
+                "current_test": run.current_test,
+                "completed": len(run.results),
+                "total": len(run.tests),
+            })
 
     try:
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30)
             except asyncio.TimeoutError:
-                # Send a keepalive ping
                 try:
                     await websocket.send_json({"type": "ping"})
                 except Exception:
@@ -482,5 +639,4 @@ async def _handle_input_safe(ds: DeviceState, msg: dict) -> None:
     try:
         await _handle_input(ds, msg)
     except Exception:
-        # Drop transient adb/input errors to keep interaction loop fluid.
         return

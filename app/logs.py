@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Optional
 
 import config
-from app.sdk import _sdk_env
+from app.adb_util import adb_bin, adb_env
 from app.state import DeviceState, app_state
 import app.device as device
 
 
 def _adb() -> str:
-    return str(config.ANDROID_SDK_ROOT / "platform-tools" / "adb.exe")
+    return adb_bin()
 
 
 # ── Log line parsing ───────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ async def run_logcat(ds: DeviceState, session_ts: str) -> None:
     """
     jsonl_path, raw_path = _open_trail(ds, session_ts)
     adb = _adb()
-    env = _sdk_env()
+    env = adb_env()
 
     # Clear logcat buffer at session start
     await device.clear_logcat(ds.serial)

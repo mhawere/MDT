@@ -1,4 +1,4 @@
 // Windows resource file example
-// Use this to embed the Triplet icon into a native Windows executable.
+// Use this to embed the MDT icon into a native Windows executable.
 
 IDI_ICON1 ICON "triplet-exe-icon.ico"

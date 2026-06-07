@@ -1,26 +1,7 @@
-TRIPLET BRAND PACKAGE
-=====================
+MDT BRAND NOTES
+===============
 
-Brand: Triplet
-Concept: three synchronized parallel lanes / triplet execution / side-by-side testing.
-Primary colors:
-- Deep navy: #07122B
-- Accent teal: #00D3CD
-- Accent cyan: #00A4D7
+Brand: MDT (Multi-Device Tester)
+Primary UI: dark theme, system fonts, 2-column device grid.
 
-Included assets:
-- logo/                         Primary logo, symbol, transparent PNGs, app icon sizes
-- favicon/                      favicon.ico, PNG favicon sizes, apple-touch-icon, web manifest
-- windows-exe-icon/             Windows .ico file for executable branding + example snippets
-- svg/                          Editable SVG primary logo and symbol
-- source-generated-references/  Original AI-generated visual references
-
-Important:
-- No compiled Windows .exe binary is included. The package includes the Windows .ico asset that you attach to your executable during build/packaging.
-- The SVG wordmark uses system fonts (Segoe UI / Inter / Arial fallback). If you need exact typography locked for print, convert text to outlines in Illustrator/Figma/Inkscape.
-
-Recommended usage:
-- Desktop executable icon: windows-exe-icon/triplet-exe-icon.ico
-- Web favicon: favicon/favicon.ico
-- Website header/logo: logo/triplet-primary-logo-transparent.png or svg/triplet-primary-logo.svg
-- App splash/About screen: logo/triplet-app-icon-1024.png
+Static assets under static/ use MDT naming. Legacy triplet-* filenames may remain for icon resources but product branding is MDT throughout.

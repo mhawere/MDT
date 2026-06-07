@@ -8,15 +8,16 @@ from pathlib import Path
 # ── Emulator / SDK ────────────────────────────────────────────────────────────
 API_LEVEL            = 34
 DEVICE_PROFILE       = "pixel_5"
-MAX_DEVICES          = 3
-EMULATOR_MEMORY_MB   = 4096
+MAX_DEVICES          = 2
+EMULATOR_MEMORY_MB   = 1536
 EMULATOR_BOOT_TIMEOUT= 180   # seconds
 EMULATOR_GPU_MODE    = "host"
 INPUT_SWIPE_MS       = 140
+BOOT_STAGGER_SEC     = 8     # delay between parallel emulator launches
 
 # ── Streaming ─────────────────────────────────────────────────────────────────
-SCREENRECORD_SIZE        = "720x1560"   # WxH; must match device aspect; None for native
-SCREENRECORD_BITRATE     = 8_000_000    # bits per second
+SCREENRECORD_SIZE        = "540x1170"   # WxH; must match device aspect; None for native
+SCREENRECORD_BITRATE     = 2_000_000    # bits per second
 SCREENRECORD_TIME_LIMIT  = 180          # screenrecord hard max; we respawn on expiry
 
 # ── Server ────────────────────────────────────────────────────────────────────

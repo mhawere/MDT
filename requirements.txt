@@ -1,5 +1,6 @@
-fastapi
-uvicorn[standard]
-websockets
-pyaxmlparser
-requests
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pyaxmlparser==0.3.31
+psutil==6.1.1
+pytest==8.3.4
+httpx==0.28.1
