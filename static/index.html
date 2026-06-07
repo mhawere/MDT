@@ -44,6 +44,10 @@
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <span class="chip-text">Logs</span>
     </span>
+    <span id="sdk-dir-note" class="info-chip sdk-chip" title="">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+      <span class="chip-text">SDK</span>
+    </span>
     <span id="apk-dir-note" class="info-chip" title="">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
       <span class="chip-text">APKs</span>
@@ -51,6 +55,10 @@
   </div>
 
   <div class="header-actions">
+    <button id="btn-set-sdk" class="btn btn-ghost btn-sm" title="Android SDK settings" aria-label="Android SDK settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+      <span class="btn-label">SDK</span>
+    </button>
     <button id="btn-set-apk-dir" class="btn btn-ghost btn-sm" title="Browse APK folder" aria-label="Browse APK folder">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
       <span class="btn-label">APK Folder</span>
@@ -106,6 +114,35 @@
     </div>
     <div id="activity-console" class="activity-console" tabindex="0"></div>
   </section>
+</div>
+
+<!-- ── SDK settings modal ──────────────────────────────────────────────── -->
+<div id="sdk-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sdk-modal-title">
+  <div class="modal glass-panel sdk-modal">
+    <div class="modal-header">
+      <h2 id="sdk-modal-title">Android SDK</h2>
+      <button id="sdk-modal-close" class="btn btn-icon btn-sm" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sdk-status-row">
+      <span id="sdk-status-chip" class="sdk-status-chip">Checking…</span>
+      <span id="sdk-source-label" class="sdk-source-label"></span>
+    </div>
+    <div class="sdk-path-row">
+      <label for="sdk-path-input">SDK root</label>
+      <div class="sdk-path-controls">
+        <input id="sdk-path-input" type="text" class="sdk-path-input" placeholder="/path/to/Android/Sdk" spellcheck="false" />
+        <button id="sdk-btn-browse" class="btn btn-ghost btn-sm">Browse</button>
+      </div>
+    </div>
+    <div id="sdk-tools-list" class="sdk-tools-list"></div>
+    <div class="modal-footer sdk-modal-footer">
+      <button id="sdk-btn-detect" class="btn btn-ghost">Auto-detect</button>
+      <button id="sdk-btn-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="sdk-btn-save" class="btn btn-primary">Save</button>
+    </div>
+  </div>
 </div>
 
 <!-- ── Folder picker modal ──────────────────────────────────────────────── -->

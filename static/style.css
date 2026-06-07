@@ -317,6 +317,120 @@ body.page-ready {
 
 .info-chip svg { flex-shrink: 0; opacity: 0.7; }
 
+.info-chip.sdk-chip {
+  cursor: pointer;
+}
+
+.info-chip.sdk-chip.ok {
+  color: var(--ok);
+  border-color: rgba(52, 211, 153, 0.35);
+  background: var(--ok-dim);
+}
+
+.info-chip.sdk-chip.warn {
+  color: var(--state-booting);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+.info-chip.sdk-chip.error {
+  color: var(--error);
+  border-color: rgba(248, 113, 113, 0.35);
+  background: var(--error-dim);
+}
+
+/* ── SDK settings modal ───────────────────────────────────────────────────── */
+.sdk-modal { max-width: 560px; }
+
+.sdk-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.sdk-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.sdk-status-chip.ok {
+  color: var(--ok);
+  border-color: rgba(52, 211, 153, 0.4);
+  background: var(--ok-dim);
+}
+
+.sdk-status-chip.error {
+  color: var(--error);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: var(--error-dim);
+}
+
+.sdk-source-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sdk-path-row label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.sdk-path-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.sdk-path-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.sdk-tools-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.sdk-tool-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--glass-highlight);
+  border: 1px solid var(--glass-border);
+}
+
+.sdk-tool-item.found { color: var(--ok); }
+.sdk-tool-item.missing { color: var(--error); }
+
+.sdk-modal-footer {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

@@ -27,6 +27,7 @@ const TAP_THRESHOLD         = 0.004;
 const devices = new Map();
 let globalConfig = {};
 let folderPicker = null;
+let sdkSettings = null;
 let activityPanel = null;
 
 function downloadBlob(blob, filename) {
@@ -197,6 +198,7 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
   folderPicker = new FolderPicker();
+  sdkSettings = new SdkSettings(folderPicker);
   activityPanel = new ActivityPanel();
   activityPanel.connect();
 
@@ -214,6 +216,7 @@ async function init() {
     const apkNote = document.getElementById('apk-dir-note');
     apkNote.querySelector('.chip-text').textContent = _shortPath(globalConfig.apk_dir);
     apkNote.title = globalConfig.apk_dir;
+    updateSdkChip(globalConfig.sdk);
 
     setupTopBarButtons();
 
@@ -279,6 +282,7 @@ async function syncDevicesFromServer(list) {
 
   const cfgRes = await fetch('/api/config');
   globalConfig = await cfgRes.json();
+  updateSdkChip(globalConfig.sdk);
 
   const indices = new Set(list.map(d => d.index));
 
@@ -382,6 +386,9 @@ async function setApkFolder(path) {
 }
 
 function setupTopBarButtons() {
+  document.getElementById('btn-set-sdk').addEventListener('click', () => sdkSettings.open());
+  document.getElementById('sdk-dir-note').addEventListener('click', () => sdkSettings.open());
+
   document.getElementById('btn-set-apk-dir').addEventListener('click', () => {
     folderPicker.open({
       mode: 'folder',
@@ -1485,6 +1492,126 @@ class ActivityPanel {
   }
 }
 
+// ── SDK settings ──────────────────────────────────────────────────────────────
+
+function updateSdkChip(sdk) {
+  const chip = document.getElementById('sdk-dir-note');
+  if (!chip || !sdk) return;
+  const text = chip.querySelector('.chip-text');
+  text.textContent = sdk.ready ? 'SDK OK' : sdk.valid ? 'SDK partial' : 'SDK missing';
+  chip.title = sdk.sdk_root || '';
+  chip.classList.remove('ok', 'warn', 'error');
+  if (sdk.ready) chip.classList.add('ok');
+  else if (sdk.valid) chip.classList.add('warn');
+  else chip.classList.add('error');
+}
+
+class SdkSettings {
+  constructor(folderPicker) {
+    this.folderPicker = folderPicker;
+    this.modal = document.getElementById('sdk-modal');
+    this.pathInput = document.getElementById('sdk-path-input');
+    this.statusChip = document.getElementById('sdk-status-chip');
+    this.sourceLabel = document.getElementById('sdk-source-label');
+    this.toolsList = document.getElementById('sdk-tools-list');
+    this._status = null;
+
+    document.getElementById('sdk-modal-close').addEventListener('click', () => this.close());
+    document.getElementById('sdk-btn-cancel').addEventListener('click', () => this.close());
+    document.getElementById('sdk-btn-save').addEventListener('click', () => this.save());
+    document.getElementById('sdk-btn-detect').addEventListener('click', () => this.detect());
+    document.getElementById('sdk-btn-browse').addEventListener('click', () => {
+      this.folderPicker.open({
+        mode: 'folder',
+        startPath: this.pathInput.value || '',
+        title: 'Select Android SDK root',
+        onSelect: (path) => {
+          this.pathInput.value = path;
+          return true;
+        },
+      });
+    });
+    this.modal.addEventListener('click', (e) => {
+      if (e.target === this.modal) this.close();
+    });
+  }
+
+  async open() {
+    this.modal.classList.remove('hidden');
+    await this.refresh();
+  }
+
+  close() {
+    this.modal.classList.add('hidden');
+  }
+
+  async refresh() {
+    const res = await fetch('/api/sdk');
+    if (!res.ok) return;
+    this._status = await res.json();
+    this._render(this._status);
+    updateSdkChip(this._status);
+  }
+
+  _render(sdk) {
+    this.pathInput.value = sdk.sdk_root || '';
+    this.sourceLabel.textContent = sdk.source ? `Source: ${sdk.source}` : '';
+    this.statusChip.textContent = sdk.ready ? 'Ready' : sdk.valid ? 'Partial' : 'Invalid';
+    this.statusChip.className = 'sdk-status-chip ' + (sdk.ready ? 'ok' : sdk.valid ? '' : 'error');
+
+    this.toolsList.innerHTML = '';
+    const tools = sdk.tools || {};
+    Object.entries(tools).forEach(([name, info]) => {
+      const el = document.createElement('div');
+      el.className = 'sdk-tool-item ' + (info.found ? 'found' : 'missing');
+      el.textContent = (info.found ? '✓' : '✗') + ' ' + name;
+      el.title = info.path || 'Not found';
+      this.toolsList.appendChild(el);
+    });
+  }
+
+  async save() {
+    const path = this.pathInput.value.trim();
+    if (!path) {
+      showToast('Enter an SDK path', 'error');
+      return;
+    }
+    const res = await fetch('/api/sdk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.detail || 'Failed to set SDK path', 'error');
+      return;
+    }
+    globalConfig.sdk = data;
+    this._render(data);
+    updateSdkChip(data);
+    showToast(data.ready ? 'SDK configured and ready' : 'SDK path saved — some tools missing', data.ready ? 'success' : '');
+    if (data.ready) this.close();
+  }
+
+  async detect() {
+    showToast('Scanning for Android SDK…');
+    const res = await fetch('/api/sdk/detect', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.detail || 'Auto-detect failed', 'error');
+      return;
+    }
+    if (data.selected) {
+      globalConfig.sdk = data.selected;
+      this._render(data.selected);
+      updateSdkChip(data.selected);
+      showToast(`Using SDK at ${_shortPath(data.selected.sdk_root)}`, data.selected.valid ? 'success' : 'error');
+    } else {
+      showToast('No valid Android SDK found', 'error');
+    }
+  }
+}
+
 // ── Folder picker modal ───────────────────────────────────────────────────────
 
 class FolderPicker {
@@ -1519,10 +1646,10 @@ class FolderPicker {
     });
   }
 
-  open({ mode = 'folder', startPath = '', onSelect }) {
+  open({ mode = 'folder', startPath = '', onSelect, title }) {
     this.mode = mode;
     this.onSelect = onSelect;
-    this.titleEl.textContent = mode === 'path' ? 'Select Watch Path' : 'Browse APK Folder';
+    this.titleEl.textContent = title || (mode === 'path' ? 'Select Watch Path' : 'Browse Folder');
     this.selectBtn.textContent = mode === 'path' ? 'Select this path' : 'Select this folder';
     this.modal.classList.remove('hidden');
     this._load(startPath);
