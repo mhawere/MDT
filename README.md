@@ -29,6 +29,7 @@ Drop your APKs in a folder, run one command, and test. No physical phones, no An
 - **Full interaction** — tap, swipe, type, Back / Home / Recents via adb.
 - **Colour-coded log trails** — live logcat + JSONL/raw persistence in `logs/`.
 - **Built-in APK tests** — launch, crash/ANR detection, permissions, memory, network, UI taps ([docs](docs/BUILTIN_TESTS.md)).
+- **Live reload** — watch Gradle/build output and auto `adb install -r` per device ([docs](docs/LIVE_RELOAD.md)).
 - **Per-device controls** — restart, reinstall, reboot, rotate, screenshot.
 - **One command, self-contained** — Python venv + Android SDK live in the project folder.
 - **Memory-aware startup** — auto-lowers per-emulator RAM under pressure (8 GB profile defaults).
@@ -99,6 +100,62 @@ REST endpoints:
 - `POST /api/device/{index}/tests/{test_name}` — run one test
 - `GET /api/device/{index}/tests/status` — poll progress/results
 
+### Live reload
+
+See **[docs/LIVE_RELOAD.md](docs/LIVE_RELOAD.md)** for Gradle/Android Studio setup.
+
+- `GET /api/device/{index}/live-reload/status`
+- `POST /api/device/{index}/live-reload/enable`
+- `POST /api/device/{index}/live-reload/disable`
+- `POST /api/device/{index}/live-reload/sync`
+
+## Live reload (local testing)
+
+Before pushing to GitHub, verify live reload on your machine:
+
+1. **Start MDT** with at least one APK in `apk_input/`:
+   ```bash
+   cd /path/to/MDT
+   .\start.bat
+   ```
+   Or on Linux/macOS for dev:
+   ```bash
+   python -m venv .venv && .venv/bin/pip install -r requirements.txt
+   python run.py
+   ```
+
+2. **Open** http://localhost:8000 and wait until a device shows **running**.
+
+3. **Set watch path** — on the device card (Screen tab), click **Path** and enter your debug APK, e.g.:
+   ```
+   C:\your-project\app\build\outputs\apk\debug\app-debug.apk
+   ```
+
+4. **Enable Live Reload** — check the toggle; status should show **Watching**.
+
+5. **Trigger a rebuild** — in your Android project:
+   ```bash
+   ./gradlew assembleDebug
+   ```
+   Or use Android Studio **Build → Make Project**.
+
+6. **Confirm sync** — status briefly shows **Syncing…**, then **Watching** with a new timestamp; the app relaunches on the emulator.
+
+7. **Test per-device independence** — with two APKs/devices, enable reload on device 0 only; rebuild device 0's APK and confirm device 1 is unchanged.
+
+8. **Run unit tests**:
+   ```bash
+   .venv/bin/pytest tests/test_live_reload.py tests/test_smoke.py -q
+   ```
+
+9. **API smoke test** (optional, device 0 must exist and be running):
+   ```bash
+   curl -s http://127.0.0.1:8000/api/device/0/live-reload/status
+   curl -s -X POST http://127.0.0.1:8000/api/device/0/live-reload/enable \
+     -H "Content-Type: application/json" \
+     -d '{"watch_path":"apk_input/your.apk"}'
+   ```
+
 ## How it works
 
 FastAPI orchestrates each device: **ensure AVD → boot headless emulator → install APK → launch → logcat + H.264 stream**. Per-device WebSockets carry video, logs, state, and test events; input goes back through adb.
@@ -114,9 +171,11 @@ MDT/
 ├── config.py            # paths, ports, tunables
 ├── requirements.txt
 ├── docs/BUILTIN_TESTS.md
+├── docs/LIVE_RELOAD.md
 ├── app/
 │   ├── main.py          # FastAPI routes, orchestration
 │   ├── apk_tests.py     # built-in test framework
+│   ├── live_reload.py   # per-device hot reload watcher
 │   ├── sdk.py           # Android SDK bootstrap
 │   ├── emulator.py      # headless launch + boot wait
 │   ├── device.py        # adb wrappers
@@ -142,6 +201,11 @@ python -m venv .venv
 pytest tests/ -q
 python -c "from app.main import app; print('OK')"
 ```
+
+
+## Contributors
+
+- [**Josaphat12-tech**](https://github.com/Josaphat12-tech) — audit fixes, two-device layout, built-in APK tests, live reload, and pytest/test improvements. See [CONTRIBUTORS.md](CONTRIBUTORS.md).
 
 ## License
 

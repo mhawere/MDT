@@ -25,6 +25,7 @@ import app.logs as logs_mod
 import app.streamer as streamer_mod
 import app.apk as apk_mod
 import app.apk_tests as apk_tests_mod
+import app.live_reload as live_reload_mod
 
 
 # ── Session timestamp (once per server start) ─────────────────────────────────
@@ -40,6 +41,12 @@ class ApkDirPayload(BaseModel):
 
 class TestRunPayload(BaseModel):
     tests: list[str] | None = None
+
+
+class LiveReloadEnablePayload(BaseModel):
+    watch_path: str | None = None
+    mode: str = "apk"
+    remote_path: str | None = None
 
 
 def _mem_available_mb() -> int:
@@ -308,6 +315,7 @@ async def _watch_apk_dir() -> None:
 async def _shutdown() -> None:
     """Gracefully stop all devices."""
     print("\n[MDT] Shutting down devices…")
+    await live_reload_mod.shutdown_all()
     global _apk_watcher_task
     if _apk_watcher_task and not _apk_watcher_task.done():
         _apk_watcher_task.cancel()
@@ -481,6 +489,61 @@ async def reinstall_all():
     return {"results": results}
 
 
+# ── Live reload endpoints ─────────────────────────────────────────────────────
+
+@app.get("/api/device/{index}/live-reload/status")
+async def live_reload_status(index: int):
+    _get_device_or_404(index)
+    return live_reload_mod.get_state(index).to_dict()
+
+
+@app.post("/api/device/{index}/live-reload/enable")
+async def live_reload_enable(index: int, payload: LiveReloadEnablePayload | None = None):
+    ds = _get_device_or_404(index)
+    if ds.state not in ("running", "installing"):
+        raise HTTPException(status_code=409, detail=f"Device not ready (state={ds.state})")
+
+    body = payload or LiveReloadEnablePayload()
+    watch_path = body.watch_path
+    if not watch_path:
+        if ds.apk_path:
+            watch_path = str(ds.apk_path)
+        else:
+            raise HTTPException(status_code=400, detail="watch_path is required")
+
+    try:
+        lr = await live_reload_mod.enable(
+            ds,
+            watch_path=watch_path,
+            mode=body.mode,
+            remote_path=body.remote_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"ok": True, **lr.to_dict()}
+
+
+@app.post("/api/device/{index}/live-reload/disable")
+async def live_reload_disable(index: int):
+    _get_device_or_404(index)
+    lr = await live_reload_mod.disable(index)
+    return {"ok": True, **lr.to_dict()}
+
+
+@app.post("/api/device/{index}/live-reload/sync")
+async def live_reload_sync_now(index: int):
+    ds = _get_device_or_404(index)
+    lr = live_reload_mod.get_state(index)
+    if not lr.enabled:
+        raise HTTPException(status_code=409, detail="Live reload is not enabled")
+    try:
+        result = await live_reload_mod.sync_now(ds)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, **result, **lr.to_dict()}
+
+
 # ── APK test endpoints ────────────────────────────────────────────────────────
 
 @app.get("/api/device/{index}/tests")
@@ -558,6 +621,9 @@ async def device_ws(websocket: WebSocket, index: int):
     ds = app_state.get(index)
     if ds:
         await websocket.send_json({"type": "state", **ds.to_dict()})
+        lr = live_reload_mod.get_state(index)
+        if lr.enabled:
+            await websocket.send_json({"type": "live_reload", **lr.to_dict()})
         run = apk_tests_mod.get_run_state(index)
         if run and run.status == "running":
             await websocket.send_json({

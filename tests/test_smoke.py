@@ -9,11 +9,6 @@ from app.main import app, _adapt_startup_resources, _mem_available_mb
 from app import apk_tests
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
 def test_config_defaults():
     assert config.MAX_DEVICES == 2
     assert config.EMULATOR_MEMORY_MB == 1536
@@ -48,7 +43,7 @@ def test_list_available_tests():
     assert len(tests) == 8
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_api_config():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -59,7 +54,7 @@ async def test_api_config():
     assert "launch" in data["tests"]
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_api_devices_empty():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -68,7 +63,7 @@ async def test_api_devices_empty():
     assert isinstance(res.json(), list)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_invalid_device_returns_404():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -76,7 +71,7 @@ async def test_invalid_device_returns_404():
     assert res.status_code == 404
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_invalid_apk_dir_returns_400():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -84,7 +79,7 @@ async def test_invalid_apk_dir_returns_400():
     assert res.status_code == 400
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_unknown_test_returns_404():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

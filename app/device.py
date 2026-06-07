@@ -172,6 +172,20 @@ async def clear_logcat(serial: str) -> None:
     await asyncio.wait_for(proc.communicate(), timeout=10)
 
 
+async def push_file(serial: str, local_path: Path, remote_path: str) -> tuple[bool, str]:
+    """Push a local file to device via adb. Returns (success, output)."""
+    proc = await asyncio.create_subprocess_exec(
+        _adb(), "-s", serial, "push", str(local_path), remote_path,
+        env=_env(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    out = (stdout + stderr).decode(errors="replace")
+    success = proc.returncode == 0
+    return success, out
+
+
 async def reboot_device(serial: str) -> None:
     proc = await asyncio.create_subprocess_exec(
         _adb(), "-s", serial, "reboot",

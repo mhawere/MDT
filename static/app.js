@@ -442,6 +442,16 @@ class DeviceUI {
         <button class="btn btn-ghost btn-sm" id="btn-reboot-${this.index}"  title="Reboot device">⏻ Reboot</button>
         <button class="btn btn-ghost btn-sm" id="btn-rotate-${this.index}"  title="Rotate screen">⤾ Rotate</button>
         <button class="btn btn-ghost btn-sm" id="btn-screenshot-${this.index}" title="Save screenshot">📷 Save</button>
+      </div>
+      <!-- Live reload -->
+      <div class="live-reload-strip" id="live-reload-${this.index}">
+        <label class="live-reload-toggle" title="Watch build output and auto-install via adb">
+          <input type="checkbox" id="lr-toggle-${this.index}" />
+          <span class="lr-label">Live Reload</span>
+        </label>
+        <span class="lr-status" id="lr-status-${this.index}">Off</span>
+        <button class="btn btn-ghost btn-sm lr-set-path" id="lr-path-${this.index}" title="Set watch path">📁 Path</button>
+        <button class="btn btn-ghost btn-sm lr-sync-now hidden" id="lr-sync-${this.index}" title="Sync now">↻ Sync</button>
       </div>`;
 
     this.canvas = this.screenPane.querySelector(`#scanvas-${this.index}`);
@@ -457,6 +467,8 @@ class DeviceUI {
 
     this._wireScreenInput();
     this._wireDeviceControls();
+    this._wireLiveReload();
+    this._fetchLiveReloadStatus();
   }
 
   _buildTestPane() {
@@ -721,6 +733,137 @@ class DeviceUI {
     sp.querySelector(`#btn-screenshot-${i}`).addEventListener('click', () => this._saveScreenshot());
   }
 
+  // ── Live reload ────────────────────────────────────────────────────────────
+  _wireLiveReload() {
+    const i = this.index;
+    const toggle = this.screenPane.querySelector(`#lr-toggle-${i}`);
+    const pathBtn = this.screenPane.querySelector(`#lr-path-${i}`);
+    const syncBtn = this.screenPane.querySelector(`#lr-sync-${i}`);
+
+    this.lrWatchPath = this.ds.apk_path || '';
+
+    toggle.addEventListener('change', async () => {
+      if (toggle.checked) {
+        await this._enableLiveReload();
+      } else {
+        await this._disableLiveReload();
+      }
+    });
+
+    pathBtn.addEventListener('click', async () => {
+      const defaultPath = this.lrWatchPath || this.ds.apk_path || '';
+      const entered = window.prompt(
+        'Watch path (APK file or build output folder)\n\nGradle example:\n  app/build/outputs/apk/debug/app-debug.apk',
+        defaultPath
+      );
+      if (entered === null) return;
+      this.lrWatchPath = entered;
+      if (toggle.checked) {
+        await this._enableLiveReload();
+      }
+    });
+
+    syncBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch(`/api/device/${i}/live-reload/sync`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        showToast(`Device ${i}: synced`);
+      } catch (e) {
+        showToast(`Device ${i}: sync failed — ${e.message}`, 'error');
+      }
+    });
+  }
+
+  async _fetchLiveReloadStatus() {
+    try {
+      const res = await fetch(`/api/device/${this.index}/live-reload/status`);
+      if (res.ok) this._updateLiveReloadUI(await res.json());
+    } catch (_) {}
+  }
+
+  async _enableLiveReload() {
+    const i = this.index;
+    const toggle = this.screenPane.querySelector(`#lr-toggle-${i}`);
+    const body = {};
+    if (this.lrWatchPath) body.watch_path = this.lrWatchPath;
+
+    try {
+      const res = await fetch(`/api/device/${i}/live-reload/enable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      this.lrWatchPath = data.watch_path || this.lrWatchPath;
+      this._updateLiveReloadUI(data);
+      showToast(`Device ${i}: live reload watching`);
+    } catch (e) {
+      if (toggle) toggle.checked = false;
+      showToast(`Device ${i}: live reload failed — ${e.message}`, 'error');
+    }
+  }
+
+  async _disableLiveReload() {
+    const i = this.index;
+    try {
+      const res = await fetch(`/api/device/${i}/live-reload/disable`, { method: 'POST' });
+      if (res.ok) this._updateLiveReloadUI(await res.json());
+      showToast(`Device ${i}: live reload stopped`);
+    } catch (_) {}
+  }
+
+  _updateLiveReloadUI(data) {
+    const i = this.index;
+    const toggle = this.screenPane.querySelector(`#lr-toggle-${i}`);
+    const statusEl = this.screenPane.querySelector(`#lr-status-${i}`);
+    const syncBtn = this.screenPane.querySelector(`#lr-sync-${i}`);
+    const strip = this.screenPane.querySelector(`#live-reload-${i}`);
+    if (!statusEl) return;
+
+    if (toggle) toggle.checked = !!data.enabled;
+
+    const status = data.status || 'stopped';
+    let label = status;
+    if (status === 'watching') label = 'Watching';
+    else if (status === 'syncing') label = 'Syncing…';
+    else if (status === 'error') label = 'Error';
+    else label = 'Off';
+
+    if (data.last_sync_at) {
+      const t = new Date(data.last_sync_at).toLocaleTimeString();
+      label += ` · ${t}`;
+    }
+    if (data.last_error) {
+      statusEl.title = data.last_error;
+    } else {
+      statusEl.title = data.watch_path || '';
+    }
+
+    statusEl.textContent = label;
+    statusEl.className = `lr-status lr-${status}`;
+
+    if (strip) strip.classList.toggle('lr-active', !!data.enabled);
+    if (syncBtn) syncBtn.classList.toggle('hidden', !data.enabled);
+  }
+
+  _onLiveReload(msg) {
+    this._updateLiveReloadUI(msg);
+    if (msg.status === 'syncing') {
+      showToast(`Device ${this.index}: syncing…`);
+    } else if (msg.status === 'watching' && msg.last_sync_at) {
+      showToast(`Device ${this.index}: reload complete`);
+    } else if (msg.status === 'error') {
+      showToast(`Device ${this.index}: reload error — ${msg.last_error || 'unknown'}`, 'error');
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   _normalizeCoords(e) {
     const rect = this.canvas.getBoundingClientRect();
@@ -798,6 +941,7 @@ class DeviceUI {
       case 'state':    this._onState(msg);         break;
       case 'counters': this._onCounters(msg);      break;
       case 'test':     this._onTest(msg);          break;
+      case 'live_reload': this._onLiveReload(msg); break;
       case 'ping':     break; // keepalive
     }
   }

@@ -554,6 +554,59 @@ html, body {
   border-top: 1px solid var(--border);
 }
 
+/* ── Live reload strip ────────────────────────────────────────────────────── */
+.live-reload-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.live-reload-strip.lr-active {
+  background: rgba(59, 130, 246, 0.08);
+  border-top-color: var(--accent-dim);
+}
+
+.live-reload-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+}
+
+.live-reload-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+}
+
+.lr-label {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.lr-status {
+  flex: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.lr-status.lr-watching { color: var(--ok); }
+.lr-status.lr-syncing  { color: var(--state-installing); }
+.lr-status.lr-error    { color: var(--error); }
+
+.lr-set-path, .lr-sync-now { flex-shrink: 0; }
+
+.hidden { display: none !important; }
+
 /* ── Log pane ─────────────────────────────────────────────────────────────── */
 .log-pane {
   display: flex;

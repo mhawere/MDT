@@ -20,6 +20,10 @@ SCREENRECORD_SIZE        = "540x1170"   # WxH; must match device aspect; None fo
 SCREENRECORD_BITRATE     = 2_000_000    # bits per second
 SCREENRECORD_TIME_LIMIT  = 180          # screenrecord hard max; we respawn on expiry
 
+# ── Live reload ───────────────────────────────────────────────────────────────
+LIVE_RELOAD_POLL_SEC     = 1.0    # file watch poll interval
+LIVE_RELOAD_DEBOUNCE_SEC = 1.5    # wait after change before adb sync
+
 # ── Server ────────────────────────────────────────────────────────────────────
 SERVER_HOST          = "127.0.0.1"
 SERVER_PORT          = 8000
