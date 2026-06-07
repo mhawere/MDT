@@ -9,16 +9,16 @@ import threading
 import time
 
 import config
-from app.sdk import _sdk_env
+from app.sdk import _sdk_env, adb_path, emulator_bin_path
 from app.state import DeviceState, app_state
 
 
 def _emulator_bin() -> str:
-    return str(config.ANDROID_SDK_ROOT / "emulator" / "emulator.exe")
+    return str(emulator_bin_path())
 
 
 def _adb_bin() -> str:
-    return str(config.ANDROID_SDK_ROOT / "platform-tools" / "adb.exe")
+    return str(adb_path())
 
 
 def _read_stderr(proc: subprocess.Popen, buf: list[str]) -> None:
