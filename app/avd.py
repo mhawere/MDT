@@ -6,7 +6,7 @@ from __future__ import annotations
 import subprocess
 
 import config
-from app.sdk import AVDMANAGER, ABI, _sdk_env
+from app.sdk import ABI, _sdk_env, avdmanager_path
 
 
 def avd_exists(name: str) -> bool:
@@ -30,7 +30,7 @@ def create_avd(index: int) -> str:
 
     pkg = f"system-images;android-{config.API_LEVEL};google_apis;{ABI}"
     cmd = [
-        str(AVDMANAGER), "create", "avd",
+        str(avdmanager_path()), "create", "avd",
         "-n", name,
         "-k", pkg,
         "-d", config.DEVICE_PROFILE,

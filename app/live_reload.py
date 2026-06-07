@@ -12,6 +12,7 @@ from typing import Any
 
 import config
 import app.device as device
+import app.activity_log as activity_log_mod
 from app.state import DeviceState, app_state
 
 MODES = ("apk", "assets")
@@ -211,6 +212,12 @@ async def enable(
             name=f"live_reload_{index}",
         )
         await _broadcast(index, lr)
+        await activity_log_mod.activity_log.emit(
+            "info",
+            f"Live reload watching {p}",
+            source="live_reload",
+            device_index=index,
+        )
         return lr
 
 
@@ -222,6 +229,9 @@ async def _watch_loop(ds: DeviceState, lr: LiveReloadState) -> None:
             await asyncio.sleep(LIVE_RELOAD_POLL_SEC)
             if not lr.enabled or not lr.watch_path:
                 break
+
+            if ds.state != "running":
+                continue
 
             current = _file_snapshot(lr.watch_path)
             changed = detect_changes(lr._snapshots, current)
@@ -265,8 +275,17 @@ async def sync_now(
     if not lr.enabled or not lr.watch_path:
         raise RuntimeError("Live reload is not enabled")
 
+    if ds.state != "running":
+        raise RuntimeError(f"Device not ready for sync (state={ds.state})")
+
     async with _lock:
         await _set_status(index, lr, "syncing")
+        await activity_log_mod.activity_log.emit(
+            "info",
+            f"Live reload syncing {lr.watch_path}",
+            source="live_reload",
+            device_index=index,
+        )
         try:
             if lr.mode == "apk":
                 result = await _sync_apk(ds, lr)
@@ -279,11 +298,23 @@ async def sync_now(
             lr.last_error = ""
             lr.status = "watching"
             await _broadcast(index, lr)
+            await activity_log_mod.activity_log.emit(
+                "success",
+                f"Live reload installed {result.get('file', 'build')}",
+                source="live_reload",
+                device_index=index,
+            )
             return result
         except Exception as exc:
             msg = str(exc)[:400]
             lr.last_error = msg
             await _set_status(index, lr, "error", error=msg)
+            await activity_log_mod.activity_log.emit(
+                "error",
+                f"Live reload failed: {msg}",
+                source="live_reload",
+                device_index=index,
+            )
             raise
 
 

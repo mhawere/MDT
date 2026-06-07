@@ -12,7 +12,7 @@ from fastapi import WebSocket
 
 
 # ── Device state machine ─────────────────────────────────────────────────────
-STATES = ("idle", "booting", "installing", "running", "error")
+STATES = ("idle", "booting", "installing", "running", "error", "closed")
 
 
 @dataclass
@@ -20,6 +20,7 @@ class DeviceState:
     index: int
     serial: str
     avd_name: str
+    active: bool             = True    # False = slot closed by user, no emulator
     apk_path: Optional[Path] = None
     package: Optional[str]   = None
     state: str               = "idle"   # one of STATES
@@ -37,12 +38,15 @@ class DeviceState:
     logcat_proc: object         = field(default=None, repr=False)
     streamer_task: object       = field(default=None, repr=False)
     logcat_task: object         = field(default=None, repr=False)
+    reboot_task: object         = field(default=None, repr=False)
+    reboot_failures: int        = 0
 
     def to_dict(self) -> dict:
         return {
             "index":     self.index,
             "serial":    self.serial,
             "avd_name":  self.avd_name,
+            "active":    self.active,
             "apk_path":  str(self.apk_path) if self.apk_path else None,
             "package":   self.package,
             "state":     self.state,
@@ -67,7 +71,7 @@ class AppState:
 
     def register_device(self, ds: DeviceState) -> None:
         self.devices.append(ds)
-        self._ws[ds.index] = set()
+        self._ws.setdefault(ds.index, set())
 
     def get(self, index: int) -> Optional[DeviceState]:
         for d in self.devices:
@@ -121,6 +125,12 @@ class AppState:
 
     def ws_count(self, index: int) -> int:
         return len(self._ws.get(index, set()))
+
+    def active_devices(self) -> list[DeviceState]:
+        return [d for d in self.devices if d.active]
+
+    def sorted_devices(self) -> list[DeviceState]:
+        return sorted(self.devices, key=lambda d: d.index)
 
 
 # Singleton

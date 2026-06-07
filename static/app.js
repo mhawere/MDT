@@ -26,6 +26,9 @@ const TAP_THRESHOLD         = 0.004;
 /** @type {Map<number, DeviceUI>} index → DeviceUI */
 const devices = new Map();
 let globalConfig = {};
+let folderPicker = null;
+let sdkSettings = null;
+let activityPanel = null;
 
 function downloadBlob(blob, filename) {
   if (!blob) return;
@@ -194,6 +197,11 @@ class H264Player {
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
+  folderPicker = new FolderPicker();
+  sdkSettings = new SdkSettings(folderPicker);
+  activityPanel = new ActivityPanel();
+  activityPanel.connect();
+
   try {
     const [cfgRes, devRes] = await Promise.all([
       fetch('/api/config'),
@@ -202,40 +210,117 @@ async function init() {
     globalConfig = await cfgRes.json();
     const devList = await devRes.json();
 
-    document.getElementById('log-dir-note').textContent = `Logs: ${globalConfig.log_dir}`;
-    document.getElementById('log-dir-note').title        = globalConfig.log_dir;
-    document.getElementById('apk-dir-note').textContent  = `APKs: ${globalConfig.apk_dir}`;
-    document.getElementById('apk-dir-note').title        = globalConfig.apk_dir;
+    const logNote = document.getElementById('log-dir-note');
+    logNote.querySelector('.chip-text').textContent = _shortPath(globalConfig.log_dir);
+    logNote.title = globalConfig.log_dir;
+    const apkNote = document.getElementById('apk-dir-note');
+    apkNote.querySelector('.chip-text').textContent = _shortPath(globalConfig.apk_dir);
+    apkNote.title = globalConfig.apk_dir;
+    updateSdkChip(globalConfig.sdk);
 
     setupTopBarButtons();
 
-    if (devList.length === 0) {
+    if (devList.every(d => !d.active) && (globalConfig.apk_count || 0) === 0) {
       renderEmptyState();
     } else {
-      devList.forEach(ds => createDeviceCard(ds));
+      await syncDevicesFromServer(devList);
       updateGlobalStatus();
     }
   } catch (e) {
     showToast('Failed to connect to MDT server. Is it running?', 'error');
   }
 
-  // Poll for new devices (e.g., user added APKs, page loaded before orchestration)
+  document.body.classList.remove('page-loading');
+  document.body.classList.add('page-ready');
+
+  setupResponsiveLayout();
   setInterval(pollDevices, 4000);
+}
+
+/** Debounced resize + ResizeObserver so canvas tap coords stay accurate after layout changes. */
+function setupResponsiveLayout() {
+  let resizeTimer = null;
+  const onResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      devices.forEach(d => d._onLayoutResize?.());
+    }, 100);
+  };
+  window.addEventListener('resize', onResize, { passive: true });
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(onResize);
+    const grid = document.getElementById('main-grid');
+    if (grid) ro.observe(grid);
+  }
 }
 
 async function pollDevices() {
   try {
     const res  = await fetch('/api/devices');
     const list = await res.json();
-    if (list.length > devices.size) {
-      // Remove empty state if present
-      const empty = document.getElementById('empty-state');
-      if (empty) empty.remove();
-      list.forEach(ds => {
-        if (!devices.has(ds.index)) createDeviceCard(ds);
-      });
+    if (list.every(d => !d.active) && (globalConfig.apk_count || 0) === 0) {
+      if (!document.getElementById('empty-state')) {
+        devices.forEach((ui, idx) => {
+          ui.destroy?.();
+          devices.delete(idx);
+        });
+        renderEmptyState();
+      }
+      return;
     }
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.remove();
+    await syncDevicesFromServer(list);
   } catch (_) {}
+}
+
+async function syncDevicesFromServer(list) {
+  if (!list) {
+    const res = await fetch('/api/devices');
+    list = await res.json();
+  }
+
+  const cfgRes = await fetch('/api/config');
+  globalConfig = await cfgRes.json();
+  updateSdkChip(globalConfig.sdk);
+
+  const indices = new Set(list.map(d => d.index));
+
+  for (const [idx, ui] of devices) {
+    if (!indices.has(idx)) {
+      ui.destroy?.();
+      devices.delete(idx);
+    }
+  }
+
+  list.forEach(ds => {
+    if (!ds.active) {
+      if (devices.has(ds.index)) {
+        const ui = devices.get(ds.index);
+        if (ui.isClosedSlot) return;
+        ui.destroy?.();
+        devices.delete(ds.index);
+      }
+      createClosedSlotCard(ds);
+      return;
+    }
+
+    if (devices.has(ds.index)) {
+      const ui = devices.get(ds.index);
+      if (ui.isClosedSlot) {
+        ui.destroy?.();
+        devices.delete(ds.index);
+        createDeviceCard(ds);
+      } else {
+        ui.updateFromServer?.(ds);
+      }
+    } else {
+      createDeviceCard(ds);
+    }
+  });
+
+  updateGlobalStatus();
+  updateAddDeviceHint(list);
 }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
@@ -243,40 +328,77 @@ function renderEmptyState() {
   const grid = document.getElementById('main-grid');
   grid.innerHTML = `
     <div id="empty-state">
-      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="5" y="2" width="14" height="20" rx="2"/>
-        <line x1="12" y1="18" x2="12.01" y2="18"/>
-        <line x1="9" y1="7" x2="15" y2="7"/>
-        <line x1="9" y1="11" x2="13" y2="11"/>
-      </svg>
+      <div class="empty-orb">
+        <div class="empty-orb-inner">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="2" width="14" height="20" rx="2"/>
+            <line x1="12" y1="18" x2="12.01" y2="18"/>
+          </svg>
+        </div>
+      </div>
       <h2>No APKs detected</h2>
-      <p>Drop up to <strong>2 APK files</strong> into the <code>apk_input/</code> folder, then refresh or restart MDT.</p>
-      <p style="font-size:12px; color: var(--text-muted);">The server is running and waiting.</p>
+      <p>Browse to a folder containing up to <strong>2 APK files</strong>, or drop APKs into your APK folder. MDT will detect them automatically.</p>
+      <div class="empty-actions">
+        <button id="empty-browse-btn" class="btn btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+          Browse APK Folder
+        </button>
+      </div>
+      <div class="drop-hint">Server is running and waiting for APKs</div>
     </div>`;
-  document.getElementById('global-status').textContent = 'No APKs';
+  const pill = document.getElementById('global-status');
+  pill.querySelector('.status-label').textContent = 'No APKs';
+  pill.className = 'status-pill';
+  document.getElementById('empty-browse-btn').addEventListener('click', () => {
+    folderPicker.open({ mode: 'folder', startPath: globalConfig.apk_dir, onSelect: setApkFolder });
+  });
 }
 
 // ── Top-bar button wiring ─────────────────────────────────────────────────────
+async function setApkFolder(path) {
+  const res = await fetch('/api/apk_dir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    showToast(err.detail || 'Failed to update APK folder', 'error');
+    return false;
+  }
+  const data = await res.json();
+  globalConfig.apk_dir = data.apk_dir;
+  const note = document.getElementById('apk-dir-note');
+  note.querySelector('.chip-text').textContent = _shortPath(data.apk_dir);
+  note.title = data.apk_dir;
+  showToast('APK folder updated — resyncing devices…', 'success');
+
+  const empty = document.getElementById('empty-state');
+  if (empty) empty.remove();
+
+  if (data.devices) {
+    globalConfig.apk_count = data.devices.filter(d => d.apk_path).length;
+    await syncDevicesFromServer(data.devices);
+  } else {
+    await syncDevicesFromServer();
+  }
+  return true;
+}
+
 function setupTopBarButtons() {
-  document.getElementById('btn-set-apk-dir').addEventListener('click', async () => {
-    const current = globalConfig.apk_dir || '';
-    const entered = window.prompt('Enter APK folder path', current);
-    if (!entered) return;
-    const res = await fetch('/api/apk_dir', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: entered }),
+  document.getElementById('btn-set-sdk').addEventListener('click', () => sdkSettings.open());
+  document.getElementById('sdk-dir-note').addEventListener('click', () => sdkSettings.open());
+
+  document.getElementById('btn-set-apk-dir').addEventListener('click', () => {
+    folderPicker.open({
+      mode: 'folder',
+      startPath: globalConfig.apk_dir,
+      onSelect: setApkFolder,
     });
-    if (!res.ok) {
-      showToast('Failed to update APK folder', 'error');
-      return;
-    }
-    const data = await res.json();
-    globalConfig.apk_dir = data.apk_dir;
-    const note = document.getElementById('apk-dir-note');
-    note.textContent = `APKs: ${data.apk_dir}`;
-    note.title = data.apk_dir;
-    showToast('APK folder updated');
+  });
+
+  document.getElementById('btn-toggle-activity').addEventListener('click', () => {
+    activityPanel.toggleCollapse();
   });
 
   document.getElementById('btn-restart-all').addEventListener('click', async () => {
@@ -296,18 +418,35 @@ function setupTopBarButtons() {
 // ── Global status ─────────────────────────────────────────────────────────────
 function updateGlobalStatus() {
   const pill = document.getElementById('global-status');
-  const states = [...devices.values()].map(d => d.state);
+  const label = pill.querySelector('.status-label');
+  const active = [...devices.values()].filter(d => !d.isClosedSlot);
+  if (!active.length) {
+    const hasApks = (globalConfig.apk_count || 0) > 0;
+    label.textContent = hasApks ? 'No active devices' : 'No APKs';
+    pill.className = 'status-pill';
+    return;
+  }
+  const states = active.map(d => d.state);
   if (states.every(s => s === 'running')) {
-    pill.textContent = `${states.length} device${states.length > 1 ? 's' : ''} running`;
-    pill.className   = 'status-pill running';
+    label.textContent = `${states.length} device${states.length > 1 ? 's' : ''} running`;
+    pill.className = 'status-pill running';
   } else if (states.some(s => s === 'error')) {
-    pill.textContent = 'Error on one or more devices';
-    pill.className   = 'status-pill';
+    label.textContent = 'Error on one or more devices';
+    pill.className = 'status-pill error';
   } else {
     const booting = states.filter(s => s === 'booting' || s === 'installing').length;
-    pill.textContent = booting ? `${booting} device${booting > 1 ? 's' : ''} starting…` : 'Idle';
-    pill.className   = 'status-pill';
+    label.textContent = booting ? `${booting} device${booting > 1 ? 's' : ''} starting…` : 'Idle';
+    pill.className = booting ? 'status-pill booting' : 'status-pill';
   }
+}
+
+function updateAddDeviceHint(list) {
+  const activeCount = list.filter(d => d.active).length;
+  const canAdd = activeCount < (globalConfig.max_devices || 2) && (globalConfig.apk_count || 0) > activeCount;
+  document.querySelectorAll('.closed-slot-card .btn-add-device').forEach(btn => {
+    btn.disabled = !canAdd;
+    btn.title = canAdd ? 'Start emulator in this slot' : 'No APK available or max devices reached';
+  });
 }
 
 // ── Device card factory ───────────────────────────────────────────────────────
@@ -320,6 +459,7 @@ class DeviceUI {
     this.index   = ds.index;
     this.state   = ds.state || 'idle';
     this.ds      = ds;
+    this.isClosedSlot = false;
     this.ws      = null;
     this.wsRetry = 0;
 
@@ -362,8 +502,11 @@ class DeviceUI {
       <div class="card-header">
         <div class="card-header-row1">
           <span class="ws-dot disconnected" id="ws-dot-${this.index}" title="WebSocket"></span>
-          <span class="apk-name" title="${apkName}">${apkName}</span>
+          <span class="apk-name" id="apk-name-${this.index}" title="${apkName}">${apkName}</span>
           <span class="state-badge badge-${this.state}" id="badge-${this.index}">${this.state}</span>
+          <button class="btn btn-icon btn-sm btn-close-device" id="btn-close-${this.index}" title="Close device slot" aria-label="Close device">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
         <div class="card-meta">
           <span class="meta-item" id="pkg-${this.index}" title="${pkg}">${_truncate(pkg, 32)}</span>
@@ -404,6 +547,50 @@ class DeviceUI {
         btn.classList.add('active');
       });
     });
+
+    this.card.querySelector(`#btn-close-${this.index}`)?.addEventListener('click', () => this._closeDevice());
+  }
+
+  async _closeDevice() {
+    try {
+      const res = await fetch(`/api/device/${this.index}/close`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      showToast(`Device ${this.index} closed`);
+      await syncDevicesFromServer();
+    } catch (e) {
+      showToast(`Failed to close device ${this.index}: ${e.message}`, 'error');
+    }
+  }
+
+  updateFromServer(ds) {
+    this.ds = ds;
+    const apkName = ds.apk_path
+      ? ds.apk_path.split(/[\\/]/).pop()
+      : `Device ${ds.index}`;
+    const apkEl = document.getElementById(`apk-name-${this.index}`);
+    if (apkEl) {
+      apkEl.textContent = apkName;
+      apkEl.title = apkName;
+    }
+    if (ds.package) {
+      const el = document.getElementById(`pkg-${this.index}`);
+      if (el) { el.textContent = _truncate(ds.package, 32); el.title = ds.package; }
+    }
+  }
+
+  destroy() {
+    if (this.testPollTimer) clearInterval(this.testPollTimer);
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.close();
+      this.ws = null;
+    }
+    if (this.player) this.player.reset();
+    this.card?.remove();
   }
 
   _buildScreenPane() {
@@ -469,6 +656,7 @@ class DeviceUI {
     this._wireDeviceControls();
     this._wireLiveReload();
     this._fetchLiveReloadStatus();
+    this._onLayoutResize();
   }
 
   _buildTestPane() {
@@ -750,17 +938,17 @@ class DeviceUI {
       }
     });
 
-    pathBtn.addEventListener('click', async () => {
-      const defaultPath = this.lrWatchPath || this.ds.apk_path || '';
-      const entered = window.prompt(
-        'Watch path (APK file or build output folder)\n\nGradle example:\n  app/build/outputs/apk/debug/app-debug.apk',
-        defaultPath
-      );
-      if (entered === null) return;
-      this.lrWatchPath = entered;
-      if (toggle.checked) {
-        await this._enableLiveReload();
-      }
+    pathBtn.addEventListener('click', () => {
+      const defaultPath = this.lrWatchPath || this.ds.apk_path || globalConfig.apk_dir || '';
+      folderPicker.open({
+        mode: 'path',
+        startPath: defaultPath,
+        onSelect: async (path) => {
+          this.lrWatchPath = path;
+          if (toggle.checked) await this._enableLiveReload();
+          return true;
+        },
+      });
     });
 
     syncBtn.addEventListener('click', async () => {
@@ -865,11 +1053,42 @@ class DeviceUI {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+  /** Visible video area inside letterboxed canvas (object-fit: contain). */
+  _getCanvasDisplayRect() {
+    const canvas = this.canvas;
+    const rect = canvas.getBoundingClientRect();
+    const iw = canvas.width;
+    const ih = canvas.height;
+    if (!iw || !ih || !rect.width || !rect.height) return rect;
+
+    const elAspect = rect.width / rect.height;
+    const vidAspect = iw / ih;
+    let w, h, x, y;
+
+    if (vidAspect > elAspect) {
+      w = rect.width;
+      h = rect.width / vidAspect;
+      x = rect.left;
+      y = rect.top + (rect.height - h) / 2;
+    } else {
+      h = rect.height;
+      w = rect.height * vidAspect;
+      x = rect.left + (rect.width - w) / 2;
+      y = rect.top;
+    }
+    return { left: x, top: y, width: w, height: h };
+  }
+
   _normalizeCoords(e) {
-    const rect = this.canvas.getBoundingClientRect();
+    const rect = this._getCanvasDisplayRect();
     const nx = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     const ny = Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height));
     return { nx, ny };
+  }
+
+  _onLayoutResize() {
+    // Force layout recalc; coords are computed on demand via getBoundingClientRect.
+    void this.canvas?.offsetHeight;
   }
 
   _send(msg) {
@@ -1076,6 +1295,470 @@ function createDeviceCard(ds) {
   devices.set(ds.index, ui);
 }
 
+function createClosedSlotCard(ds) {
+  if (devices.has(ds.index)) return;
+
+  const grid = document.getElementById('main-grid');
+  const card = document.createElement('div');
+  card.className = 'device-card closed-slot-card state-closed';
+  card.id = `device-card-${ds.index}`;
+
+  const slotLabel = ds.index === 0 ? 'Device 1' : 'Device 2';
+  const hasApks = (globalConfig.apk_count || 0) > 0;
+
+  card.innerHTML = `
+    <div class="closed-slot-inner">
+      <div class="closed-slot-icon">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+        </svg>
+      </div>
+      <h3 class="closed-slot-title">${slotLabel} — Slot closed</h3>
+      <p class="closed-slot-desc">${hasApks ? 'An APK is available in the current folder.' : 'Add APKs to the folder, then open this slot.'}</p>
+      <button class="btn btn-primary btn-add-device" id="btn-add-${ds.index}" ${hasApks ? '' : 'disabled'}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add device
+      </button>
+    </div>`;
+
+  grid.appendChild(card);
+
+  const ui = {
+    index: ds.index,
+    state: 'closed',
+    isClosedSlot: true,
+    card,
+    destroy() { card.remove(); },
+  };
+  devices.set(ds.index, ui);
+
+  card.querySelector(`#btn-add-${ds.index}`).addEventListener('click', async () => {
+    try {
+      const res = await fetch(`/api/device/${ds.index}/open`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      showToast(`Opening device ${ds.index}…`);
+      ui.destroy();
+      devices.delete(ds.index);
+      const data = await res.json();
+      createDeviceCard(data);
+      updateGlobalStatus();
+    } catch (e) {
+      showToast(`Failed to open device ${ds.index}: ${e.message}`, 'error');
+    }
+  });
+}
+
+// ── Activity panel ────────────────────────────────────────────────────────────
+
+class ActivityPanel {
+  constructor() {
+    this.panel = document.getElementById('activity-panel');
+    this.console = document.getElementById('activity-console');
+    this.shell = document.getElementById('app-shell');
+    this.filter = 'all';
+    this.autoScroll = true;
+    this.lines = [];
+    this.ws = null;
+    this.wsRetry = 0;
+    this._maxLines = 500;
+
+    document.getElementById('activity-filters').querySelectorAll('.afilter').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.filter = btn.dataset.filter;
+        document.querySelectorAll('.afilter').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this._applyFilter();
+      });
+    });
+
+    document.getElementById('btn-activity-clear').addEventListener('click', async () => {
+      await fetch('/api/activity/clear', { method: 'POST' });
+      this.console.innerHTML = '';
+      this.lines = [];
+      showToast('Activity log cleared');
+    });
+
+    document.getElementById('btn-activity-autoscroll').addEventListener('click', (e) => {
+      this.autoScroll = !this.autoScroll;
+      e.currentTarget.classList.toggle('active', this.autoScroll);
+    });
+
+    document.getElementById('btn-activity-collapse').addEventListener('click', () => {
+      this.toggleCollapse();
+    });
+
+    this.console.addEventListener('scroll', () => {
+      const atBottom = this.console.scrollHeight - this.console.scrollTop - this.console.clientHeight < 40;
+      this.autoScroll = atBottom;
+      document.getElementById('btn-activity-autoscroll').classList.toggle('active', this.autoScroll);
+    });
+
+    this._setupResize();
+  }
+
+  toggleCollapse() {
+    this.shell.classList.toggle('activity-collapsed');
+  }
+
+  _setupResize() {
+    const handle = document.getElementById('activity-resize-handle');
+    let startY = 0;
+    let startH = 0;
+
+    const onMove = (e) => {
+      const dy = startY - e.clientY;
+      const maxH = Math.min(480, Math.floor(window.innerHeight * 0.45));
+      const newH = Math.max(120, Math.min(maxH, startH + dy));
+      document.documentElement.style.setProperty('--activity-height', `${newH}px`);
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+
+    handle.addEventListener('mousedown', (e) => {
+      startY = e.clientY;
+      startH = this.panel.offsetHeight;
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+  }
+
+  connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${location.host}/ws/activity`;
+    this.ws = new WebSocket(url);
+
+    this.ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'activity_history') {
+          msg.entries.forEach(entry => this._append(entry, false));
+          if (this.autoScroll) this.console.scrollTop = this.console.scrollHeight;
+        } else if (msg.type === 'activity') {
+          this._append(msg);
+        }
+      } catch (_) {}
+    };
+
+    this.ws.onclose = this.ws.onerror = () => {
+      const delay = Math.min(WS_RECONNECT_BASE_MS * 2 ** this.wsRetry, WS_RECONNECT_MAX_MS);
+      this.wsRetry++;
+      setTimeout(() => this.connect(), delay);
+    };
+
+    this.ws.onopen = () => { this.wsRetry = 0; };
+  }
+
+  _append(entry, animate = true) {
+    const level = entry.level || 'info';
+    const line = document.createElement('div');
+    line.className = `activity-line level-${level}`;
+    line.dataset.level = level;
+    const dev = entry.device_index != null ? `D${entry.device_index}` : '';
+    line.innerHTML =
+      `<span class="act-ts">${_esc(entry.ts || '')}</span>` +
+      `<span class="act-level">${_esc(level)}</span>` +
+      `<span class="act-source">${_esc(entry.source || '')}</span>` +
+      `<span class="act-device">${_esc(dev)}</span>` +
+      `<span class="act-msg">${_esc(entry.message || '')}</span>`;
+
+    if (this.filter !== 'all' && level !== this.filter) {
+      line.style.display = 'none';
+    }
+
+    this.console.appendChild(line);
+    this.lines.push(line);
+
+    while (this.lines.length > this._maxLines) {
+      this.lines.shift().remove();
+    }
+
+    if (this.autoScroll) {
+      this.console.scrollTop = this.console.scrollHeight;
+    }
+  }
+
+  _applyFilter() {
+    this.lines.forEach(line => {
+      line.style.display =
+        (this.filter === 'all' || line.dataset.level === this.filter) ? '' : 'none';
+    });
+  }
+}
+
+// ── SDK settings ──────────────────────────────────────────────────────────────
+
+function updateSdkChip(sdk) {
+  const chip = document.getElementById('sdk-dir-note');
+  if (!chip || !sdk) return;
+  const text = chip.querySelector('.chip-text');
+  text.textContent = sdk.ready ? 'SDK OK' : sdk.valid ? 'SDK partial' : 'SDK missing';
+  chip.title = sdk.sdk_root || '';
+  chip.classList.remove('ok', 'warn', 'error');
+  if (sdk.ready) chip.classList.add('ok');
+  else if (sdk.valid) chip.classList.add('warn');
+  else chip.classList.add('error');
+}
+
+class SdkSettings {
+  constructor(folderPicker) {
+    this.folderPicker = folderPicker;
+    this.modal = document.getElementById('sdk-modal');
+    this.pathInput = document.getElementById('sdk-path-input');
+    this.statusChip = document.getElementById('sdk-status-chip');
+    this.sourceLabel = document.getElementById('sdk-source-label');
+    this.toolsList = document.getElementById('sdk-tools-list');
+    this._status = null;
+
+    document.getElementById('sdk-modal-close').addEventListener('click', () => this.close());
+    document.getElementById('sdk-btn-cancel').addEventListener('click', () => this.close());
+    document.getElementById('sdk-btn-save').addEventListener('click', () => this.save());
+    document.getElementById('sdk-btn-detect').addEventListener('click', () => this.detect());
+    document.getElementById('sdk-btn-browse').addEventListener('click', () => {
+      this.folderPicker.open({
+        mode: 'folder',
+        startPath: this.pathInput.value || '',
+        title: 'Select Android SDK root',
+        onSelect: (path) => {
+          this.pathInput.value = path;
+          return true;
+        },
+      });
+    });
+    this.modal.addEventListener('click', (e) => {
+      if (e.target === this.modal) this.close();
+    });
+  }
+
+  async open() {
+    this.modal.classList.remove('hidden');
+    await this.refresh();
+  }
+
+  close() {
+    this.modal.classList.add('hidden');
+  }
+
+  async refresh() {
+    const res = await fetch('/api/sdk');
+    if (!res.ok) return;
+    this._status = await res.json();
+    this._render(this._status);
+    updateSdkChip(this._status);
+  }
+
+  _render(sdk) {
+    this.pathInput.value = sdk.sdk_root || '';
+    this.sourceLabel.textContent = sdk.source ? `Source: ${sdk.source}` : '';
+    this.statusChip.textContent = sdk.ready ? 'Ready' : sdk.valid ? 'Partial' : 'Invalid';
+    this.statusChip.className = 'sdk-status-chip ' + (sdk.ready ? 'ok' : sdk.valid ? '' : 'error');
+
+    this.toolsList.innerHTML = '';
+    const tools = sdk.tools || {};
+    Object.entries(tools).forEach(([name, info]) => {
+      const el = document.createElement('div');
+      el.className = 'sdk-tool-item ' + (info.found ? 'found' : 'missing');
+      el.textContent = (info.found ? '✓' : '✗') + ' ' + name;
+      el.title = info.path || 'Not found';
+      this.toolsList.appendChild(el);
+    });
+  }
+
+  async save() {
+    const path = this.pathInput.value.trim();
+    if (!path) {
+      showToast('Enter an SDK path', 'error');
+      return;
+    }
+    const res = await fetch('/api/sdk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.detail || 'Failed to set SDK path', 'error');
+      return;
+    }
+    globalConfig.sdk = data;
+    this._render(data);
+    updateSdkChip(data);
+    showToast(data.ready ? 'SDK configured and ready' : 'SDK path saved — some tools missing', data.ready ? 'success' : '');
+    if (data.ready) this.close();
+  }
+
+  async detect() {
+    showToast('Scanning for Android SDK…');
+    const res = await fetch('/api/sdk/detect', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      showToast(data.detail || 'Auto-detect failed', 'error');
+      return;
+    }
+    if (data.selected) {
+      globalConfig.sdk = data.selected;
+      this._render(data.selected);
+      updateSdkChip(data.selected);
+      showToast(`Using SDK at ${_shortPath(data.selected.sdk_root)}`, data.selected.valid ? 'success' : 'error');
+    } else {
+      showToast('No valid Android SDK found', 'error');
+    }
+  }
+}
+
+// ── Folder picker modal ───────────────────────────────────────────────────────
+
+class FolderPicker {
+  constructor() {
+    this.modal = document.getElementById('folder-modal');
+    this.list = document.getElementById('folder-list');
+    this.breadcrumbs = document.getElementById('folder-breadcrumbs');
+    this.currentPathEl = document.getElementById('folder-current-path');
+    this.apkCountEl = document.getElementById('folder-apk-count');
+    this.selectBtn = document.getElementById('folder-btn-select');
+    this.titleEl = document.getElementById('folder-modal-title');
+
+    this.currentPath = '';
+    this.mode = 'folder';
+    this.onSelect = null;
+    this._data = null;
+
+    document.getElementById('folder-modal-close').addEventListener('click', () => this.close());
+    document.getElementById('folder-btn-cancel').addEventListener('click', () => this.close());
+    document.getElementById('folder-btn-up').addEventListener('click', () => {
+      if (this._data?.parent) this._load(this._data.parent);
+    });
+    document.getElementById('folder-btn-home').addEventListener('click', () => {
+      if (this._data?.home) this._load(this._data.home);
+    });
+    this.selectBtn.addEventListener('click', () => this._confirm());
+    this.modal.addEventListener('click', (e) => {
+      if (e.target === this.modal) this.close();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !this.modal.classList.contains('hidden')) this.close();
+    });
+  }
+
+  open({ mode = 'folder', startPath = '', onSelect, title }) {
+    this.mode = mode;
+    this.onSelect = onSelect;
+    this.titleEl.textContent = title || (mode === 'path' ? 'Select Watch Path' : 'Browse Folder');
+    this.selectBtn.textContent = mode === 'path' ? 'Select this path' : 'Select this folder';
+    this.modal.classList.remove('hidden');
+    this._load(startPath);
+  }
+
+  close() {
+    this.modal.classList.add('hidden');
+    this.onSelect = null;
+  }
+
+  async _load(path) {
+    this.list.innerHTML = '<div class="folder-loading"><div class="boot-spinner"></div>Loading…</div>';
+    try {
+      const q = path ? `?path=${encodeURIComponent(path)}` : '';
+      const res = await fetch(`/api/browse${q}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      this._data = await res.json();
+      this.currentPath = this._data.path;
+      this._render();
+    } catch (e) {
+      this.list.innerHTML = `<div class="folder-empty">Error: ${_esc(e.message)}</div>`;
+    }
+  }
+
+  _render() {
+    const d = this._data;
+    this.currentPathEl.textContent = d.path;
+    this.currentPathEl.title = d.path;
+    this.apkCountEl.textContent = `${d.apk_count} APK${d.apk_count !== 1 ? 's' : ''}`;
+
+    const parts = d.path.split(/[/\\]/).filter(Boolean);
+    let acc = d.path.startsWith('/') && parts.length ? '/' : '';
+    if (d.path.match(/^[A-Za-z]:/)) acc = '';
+
+    this.breadcrumbs.innerHTML = '';
+    parts.forEach((part, i) => {
+      if (d.path.match(/^[A-Za-z]:/) && i === 0) {
+        acc = part + (d.path.includes('\\') ? '\\' : '/');
+      } else {
+        acc = acc ? acc + (acc.endsWith('/') || acc.endsWith('\\') ? '' : '/') + part : part;
+      }
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'crumb-sep';
+        sep.textContent = '/';
+        this.breadcrumbs.appendChild(sep);
+      }
+      const btn = document.createElement('button');
+      btn.className = 'crumb';
+      btn.textContent = part;
+      const target = this._resolveCrumbPath(parts, i, d.path);
+      btn.addEventListener('click', () => this._load(target));
+      this.breadcrumbs.appendChild(btn);
+    });
+
+    const items = [];
+    if (this.mode === 'path' && d.apk_files) {
+      d.apk_files.forEach(f => items.push({ type: 'apk', ...f }));
+    }
+    d.directories.forEach(dir => items.push({ type: 'dir', ...dir }));
+
+    if (!items.length) {
+      this.list.innerHTML = '<div class="folder-empty">This folder is empty</div>';
+      return;
+    }
+
+    this.list.innerHTML = '';
+    items.forEach(item => {
+      const btn = document.createElement('button');
+      btn.className = `folder-item${item.type === 'apk' ? ' apk-item' : ''}`;
+      const icon = item.type === 'apk'
+        ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+        : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>';
+      btn.innerHTML = `${icon}<span class="fi-name">${_esc(item.name)}</span><span class="fi-arrow">→</span>`;
+      btn.addEventListener('click', () => {
+        if (item.type === 'dir') {
+          this._load(item.path);
+        } else if (this.mode === 'path' && this.onSelect) {
+          this.onSelect(item.path).then(ok => { if (ok !== false) this.close(); });
+        }
+      });
+      if (item.type === 'apk' && this.mode === 'path') {
+        btn.addEventListener('dblclick', () => {
+          if (this.onSelect) this.onSelect(item.path).then(ok => { if (ok !== false) this.close(); });
+        });
+      }
+      this.list.appendChild(btn);
+    });
+  }
+
+  _resolveCrumbPath(parts, index, fullPath) {
+    const isWin = /^[A-Za-z]:/.test(fullPath);
+    const sep = fullPath.includes('\\') ? '\\' : '/';
+    if (isWin) {
+      return parts.slice(0, index + 1).join(sep);
+    }
+    return '/' + parts.slice(0, index + 1).join('/');
+  }
+
+  async _confirm() {
+    if (!this.onSelect || !this.currentPath) return;
+    const ok = await this.onSelect(this.currentPath);
+    if (ok !== false) this.close();
+  }
+}
+
 // ── Toast helper ──────────────────────────────────────────────────────────────
 function showToast(msg, type = '') {
   const container = document.getElementById('toast-container');
@@ -1096,6 +1779,13 @@ function _esc(str) {
 
 function _truncate(str, max) {
   return str.length > max ? '…' + str.slice(-(max - 1)) : str;
+}
+
+function _shortPath(p) {
+  if (!p) return '—';
+  const parts = String(p).split(/[/\\]/);
+  if (parts.length <= 2) return p;
+  return '…/' + parts.slice(-2).join('/');
 }
 
 function _now() {

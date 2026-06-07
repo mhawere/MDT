@@ -8,46 +8,171 @@
   <link rel="manifest" href="/static/favicon/site.webmanifest" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
-<body>
+<body class="page-loading">
+
+<!-- Ambient background -->
+<div class="bg-mesh" aria-hidden="true"></div>
+<div class="bg-orbs" aria-hidden="true">
+  <span class="orb orb-1"></span>
+  <span class="orb orb-2"></span>
+  <span class="orb orb-3"></span>
+</div>
 
 <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
 <header id="topbar" role="banner">
   <div class="logo">
-    <!-- Android-ish phone icon -->
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
-    </svg>
-    Multi-Device Tester
-    <span class="sub">MDT · 2 devices</span>
+    <div class="logo-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+      </svg>
+    </div>
+    <div class="logo-text">
+      <span class="logo-title">Multi-Device Tester</span>
+      <span class="logo-sub">MDT · QA Dashboard</span>
+    </div>
   </div>
 
   <div class="spacer"></div>
 
-  <span id="global-status" class="status-pill">Initializing…</span>
-  <span id="log-dir-note" class="log-dir-note" title="">Logs: logs/</span>
-  <span id="apk-dir-note" class="log-dir-note" title="">APKs: apk_input/</span>
+  <span id="global-status" class="status-pill">
+    <span class="status-dot"></span>
+    <span class="status-label">Initializing…</span>
+  </span>
 
-  <button id="btn-set-apk-dir" class="btn btn-ghost btn-sm" title="Set APK source folder">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
-    APK Folder
-  </button>
+  <div class="header-chips">
+    <span id="log-dir-note" class="info-chip" title="">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="chip-text">Logs</span>
+    </span>
+    <span id="sdk-dir-note" class="info-chip sdk-chip" title="">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+      <span class="chip-text">SDK</span>
+    </span>
+    <span id="apk-dir-note" class="info-chip" title="">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+      <span class="chip-text">APKs</span>
+    </span>
+  </div>
 
-  <button id="btn-restart-all"  class="btn btn-ghost btn-sm" title="Restart all apps">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
-    Restart All
-  </button>
-  <button id="btn-reinstall-all" class="btn btn-ghost btn-sm">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
-    Reinstall All
-  </button>
-  <button id="btn-clear-logs"   class="btn btn-ghost btn-sm">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-    Clear Logs
-  </button>
+  <div class="header-actions">
+    <button id="btn-set-sdk" class="btn btn-ghost btn-sm" title="Android SDK settings" aria-label="Android SDK settings">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9z"/></svg>
+      <span class="btn-label">SDK</span>
+    </button>
+    <button id="btn-set-apk-dir" class="btn btn-ghost btn-sm" title="Browse APK folder" aria-label="Browse APK folder">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7h5l2 2h11v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+      <span class="btn-label">APK Folder</span>
+    </button>
+    <button id="btn-toggle-activity" class="btn btn-ghost btn-sm" title="Toggle activity log" aria-label="Toggle activity log">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      <span class="btn-label">Activity</span>
+    </button>
+    <button id="btn-restart-all" class="btn btn-ghost btn-sm" title="Restart all apps" aria-label="Restart all apps">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+      <span class="btn-label">Restart</span>
+    </button>
+    <button id="btn-reinstall-all" class="btn btn-ghost btn-sm" title="Reinstall all APKs" aria-label="Reinstall all APKs">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+      <span class="btn-label">Reinstall</span>
+    </button>
+    <button id="btn-clear-logs" class="btn btn-ghost btn-sm" title="Clear device log panes" aria-label="Clear device log panes">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/></svg>
+      <span class="btn-label">Clear</span>
+    </button>
+  </div>
 </header>
 
-<!-- ── Main grid ────────────────────────────────────────────────────────── -->
-<main id="main-grid" role="main" aria-label="Device panels"></main>
+<!-- ── App shell ────────────────────────────────────────────────────────── -->
+<div id="app-shell" class="app-shell">
+  <main id="main-grid" role="main" aria-label="Device panels"></main>
+
+  <!-- Activity log panel -->
+  <section id="activity-panel" class="activity-panel" aria-label="Activity log">
+    <div id="activity-resize-handle" class="activity-resize-handle" title="Drag to resize"></div>
+    <div class="activity-header">
+      <div class="activity-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        <span>Activity Log</span>
+        <span id="activity-live-badge" class="live-badge">LIVE</span>
+      </div>
+      <div class="activity-filters" id="activity-filters">
+        <button class="afilter active" data-filter="all">All</button>
+        <button class="afilter" data-filter="info">Info</button>
+        <button class="afilter" data-filter="success">Success</button>
+        <button class="afilter" data-filter="warn">Warn</button>
+        <button class="afilter" data-filter="error">Error</button>
+      </div>
+      <div class="activity-actions">
+        <button id="btn-activity-autoscroll" class="btn btn-icon btn-sm active" title="Auto-scroll">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 13 12 18 17 13"/><line x1="12" y1="6" x2="12" y2="18"/></svg>
+        </button>
+        <button id="btn-activity-clear" class="btn btn-ghost btn-sm">Clear</button>
+        <button id="btn-activity-collapse" class="btn btn-icon btn-sm" title="Collapse panel">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="activity-console" class="activity-console" tabindex="0"></div>
+  </section>
+</div>
+
+<!-- ── SDK settings modal ──────────────────────────────────────────────── -->
+<div id="sdk-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sdk-modal-title">
+  <div class="modal glass-panel sdk-modal">
+    <div class="modal-header">
+      <h2 id="sdk-modal-title">Android SDK</h2>
+      <button id="sdk-modal-close" class="btn btn-icon btn-sm" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sdk-status-row">
+      <span id="sdk-status-chip" class="sdk-status-chip">Checking…</span>
+      <span id="sdk-source-label" class="sdk-source-label"></span>
+    </div>
+    <div class="sdk-path-row">
+      <label for="sdk-path-input">SDK root</label>
+      <div class="sdk-path-controls">
+        <input id="sdk-path-input" type="text" class="sdk-path-input" placeholder="/path/to/Android/Sdk" spellcheck="false" />
+        <button id="sdk-btn-browse" class="btn btn-ghost btn-sm">Browse</button>
+      </div>
+    </div>
+    <div id="sdk-tools-list" class="sdk-tools-list"></div>
+    <div class="modal-footer sdk-modal-footer">
+      <button id="sdk-btn-detect" class="btn btn-ghost">Auto-detect</button>
+      <button id="sdk-btn-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="sdk-btn-save" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Folder picker modal ──────────────────────────────────────────────── -->
+<div id="folder-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+  <div class="modal glass-panel">
+    <div class="modal-header">
+      <h2 id="folder-modal-title">Browse Folder</h2>
+      <button id="folder-modal-close" class="btn btn-icon btn-sm" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-toolbar">
+      <button id="folder-btn-up" class="btn btn-ghost btn-sm" title="Parent folder">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Up
+      </button>
+      <button id="folder-btn-home" class="btn btn-ghost btn-sm" title="Home directory">Home</button>
+      <div id="folder-breadcrumbs" class="breadcrumbs"></div>
+    </div>
+    <div id="folder-preview" class="folder-preview">
+      <span id="folder-current-path" class="folder-path"></span>
+      <span id="folder-apk-count" class="folder-apk-count"></span>
+    </div>
+    <div id="folder-list" class="folder-list" role="listbox"></div>
+    <div class="modal-footer">
+      <button id="folder-btn-cancel" class="btn btn-ghost">Cancel</button>
+      <button id="folder-btn-select" class="btn btn-primary">Select this folder</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── Toast notifications ──────────────────────────────────────────────── -->
 <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
